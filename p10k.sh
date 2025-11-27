@@ -16,6 +16,7 @@ if ! command -v zsh >/dev/null 2>&1; then
     fi
 fi
 
+
 echo "=== Installing Zim if missing ==="
 if [ ! -d "$ZIM_HOME" ]; then
     curl -fsSL https://raw.githubusercontent.com/zimfw/install/master/install.zsh | zsh
@@ -25,10 +26,10 @@ echo "=== Fixing .zimrc ==="
 touch "$ZIMRC"
 
 # Remove broken lines like modules/powerlevel10k
-sed -i '/modules\/powerlevel10k/d' "$ZIMRC"
+sed -i '' '/modules\/powerlevel10k/d' "$ZIMRC"
 
 # Remove duplicate zmodule powerlevel10k lines
-sed -i '/zmodule powerlevel10k/d' "$ZIMRC"
+sed -i '' '/zmodule powerlevel10k/d' "$ZIMRC"
 
 # Add correct module line
 echo "zmodule powerlevel10k" >> "$ZIMRC"
@@ -44,9 +45,9 @@ echo "=== Fixing .zshrc ==="
 touch "$ZSHRC"
 
 # Remove Oh-My-Zsh conflicts
-sed -i '/oh-my-zsh/d' "$ZSHRC"
-sed -i '/ZSH_THEME/d' "$ZSHRC"
-sed -i '/plugins=/d' "$ZSHRC"
+sed -i '' '/oh-my-zsh/d' "$ZSHRC"
+sed -i '' '/ZSH_THEME/d' "$ZSHRC"
+sed -i '' '/plugins=/d' "$ZSHRC"
 
 # Ensure Zim init block exists
 if ! grep -q "zimfw.zsh" "$ZSHRC"; then
