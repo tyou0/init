@@ -6,6 +6,16 @@ ZIM_HOME="$ZDOT/.zim"
 ZSHRC="$ZDOT/.zshrc"
 ZIMRC="$ZDOT/.zimrc"
 
+### ------------------------------------------------------------
+### Universal line deletion function (macOS + Linux safe)
+### ------------------------------------------------------------
+delete_lines() {
+    local pattern="$1"
+    local file="$2"
+    [ ! -f "$file" ] && touch "$file"
+    awk "!/$pattern/" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+}
+
 echo "=== Installing dependencies ==="
 if ! command -v zsh >/dev/null 2>&1; then
     if command -v apt >/dev/null 2>&1; then
@@ -16,7 +26,6 @@ if ! command -v zsh >/dev/null 2>&1; then
     fi
 fi
 
-
 echo "=== Installing Zim if missing ==="
 if [ ! -d "$ZIM_HOME" ]; then
     curl -fsSL https://raw.githubusercontent.com/zimfw/install/master/install.zsh | zsh
@@ -25,19 +34,17 @@ fi
 echo "=== Fixing .zimrc ==="
 touch "$ZIMRC"
 
-# Remove broken lines like modules/powerlevel10k
-sed -i '' '/modules\/powerlevel10k/d' "$ZIMRC"
-
-# Remove duplicate zmodule powerlevel10k lines
-sed -i '' '/zmodule powerlevel10k/d' "$ZIMRC"
+# Remove broken or duplicate p10k entries
+delete_lines "modules/powerlevel10k" "$ZIMRC"
+delete_lines "zmodule powerlevel10k" "$ZIMRC"
 
 # Add correct module line
 echo "zmodule powerlevel10k" >> "$ZIMRC"
 
-echo "=== Removing old/broken P10k module directory ==="
+echo "=== Removing old/broken Powerlevel10k module ==="
 rm -rf "$ZIM_HOME/modules/powerlevel10k"
 
-echo "=== Installing fresh Powerlevel10k module ==="
+echo "=== Installing fresh Powerlevel10k ==="
 git clone --depth=1 https://github.com/romkatv/powerlevel10k.git \
     "$ZIM_HOME/modules/powerlevel10k"
 
@@ -45,11 +52,11 @@ echo "=== Fixing .zshrc ==="
 touch "$ZSHRC"
 
 # Remove Oh-My-Zsh conflicts
-sed -i '' '/oh-my-zsh/d' "$ZSHRC"
-sed -i '' '/ZSH_THEME/d' "$ZSHRC"
-sed -i '' '/plugins=/d' "$ZSHRC"
+delete_lines "oh-my-zsh" "$ZSHRC"
+delete_lines "ZSH_THEME" "$ZSHRC"
+delete_lines "plugins=" "$ZSHRC"
 
-# Ensure Zim init block exists
+# Add Zim init block if missing
 if ! grep -q "zimfw.zsh" "$ZSHRC"; then
 cat >> "$ZSHRC" <<EOF
 
@@ -60,11 +67,11 @@ source "\$ZIM_HOME/zimfw.zsh" init -q
 EOF
 fi
 
-echo "=== Rebuilding Zim properly ==="
+echo "=== Rebuilding Zim ==="
 zsh -c "export ZIM_HOME='$ZIM_HOME'; source '$ZIM_HOME/zimfw.zsh' init -q; zimfw install"
 zsh -c "export ZIM_HOME='$ZIM_HOME'; source '$ZIM_HOME/zimfw.zsh' init -q; zimfw update"
 
-echo "=== Adding p10k first-run auto-config ==="
+echo "=== Adding Powerlevel10k auto-config (first run) ==="
 if ! grep -q "p10k configure" "$ZSHRC"; then
 cat >> "$ZSHRC" <<'EOF'
 
