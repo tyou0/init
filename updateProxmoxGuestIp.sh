@@ -7,7 +7,6 @@
 # with prefix
 # 192.168.1.10 pve-ubuntu22
 
-
 # Optional prefix argument
 PREFIX=""
 if [[ "$1" == "--prefix" && -n "$2" ]]; then
@@ -25,11 +24,23 @@ sed -i '/# PVE-AUTO-START/,/# PVE-AUTO-END/d' $HOSTS_FILE
 
 echo "# PVE-AUTO-START" >> $HOSTS_FILE
 
+# Function to get VM/CT name
+get_guest_name() {
+    local vmid="$1"
+    local type="$2"  # "qm" or "pct"
+    
+    if [[ "$type" == "qm" ]]; then
+        qm config "$vmid" 2>/dev/null | awk -F ': ' '/^name:/{print $2}'
+    elif [[ "$type" == "pct" ]]; then
+        pct config "$vmid" 2>/dev/null | awk -F ': ' '/^hostname:/{print $2}'
+    fi
+}
+
+# Process VMs (using qm)
+echo "Processing VMs..."
 for vmid in $(qm list | awk 'NR>1 {print $1}'); do
-
-    # Get VM name
-    name=$(qm config $vmid | awk -F ': ' '/^name:/{print $2}')
-
+    name=$(get_guest_name "$vmid" "qm")
+    
     # Final hostname with optional prefix
     if [[ -n "$PREFIX" ]]; then
         host="${PREFIX}-${name}"
@@ -38,17 +49,86 @@ for vmid in $(qm list | awk 'NR>1 {print $1}'); do
     fi
 
     # Fetch IPv4 from guest agent (skip 127.x.x.x)
-    ip=$(qm guest cmd $vmid network-get-interfaces 2>/dev/null \
+    ip=$(qm guest cmd "$vmid" network-get-interfaces 2>/dev/null \
         | jq -r '.[]?."ip-addresses"[]?."ip-address"?' \
         | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$" \
         | grep -v "^127\." \
         | head -n 1)
 
     if [[ -n "$ip" ]]; then
-        echo "Adding: $ip  $host"
+        echo "Adding VM: $ip  $host"
         echo "$ip    $host" >> $HOSTS_FILE
     else
         echo "VM $vmid ($name) has no IP via guest agent."
+    fi
+done
+
+# Process LXC containers (using pct)
+echo "Processing LXC containers..."
+for ctid in $(pct list | awk 'NR>1 {print $1}'); do
+    name=$(get_guest_name "$ctid" "pct")
+    
+    # Final hostname with optional prefix
+    if [[ -n "$PREFIX" ]]; then
+        host="${PREFIX}-${name}"
+    else
+        host="$name"
+    fi
+
+    # Check if container is running
+    status=$(pct status "$ctid" 2>/dev/null | awk '{print $2}')
+    
+    if [[ "$status" != "running" ]]; then
+        echo "Container $ctid ($name) is not running, skipping."
+        continue
+    fi
+
+    # Try multiple methods to get LXC IP address
+    
+    # Method 1: Try to get IP via pct exec (if container has bash/ip tools)
+    ip=""
+    
+    # Try using ip command inside container
+    if [[ -z "$ip" ]]; then
+        ip=$(pct exec "$ctid" -- ip -4 -o addr show 2>/dev/null \
+            | grep -v "127.0.0.1" \
+            | grep -E "inet\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" \
+            | awk '{print $4}' \
+            | cut -d'/' -f1 \
+            | head -n1)
+    fi
+    
+    # Method 2: Try using hostname -I (works on most Linux distros)
+    if [[ -z "$ip" ]]; then
+        ip=$(pct exec "$ctid" -- hostname -I 2>/dev/null \
+            | awk '{print $1}' \
+            | grep -v "^127\.")
+    fi
+    
+    # Method 3: Try to get IP from network interface in Proxmox
+    if [[ -z "$ip" ]]; then
+        # This method checks the network interface on the Proxmox host
+        # It's less reliable but works for some network configurations
+        iface=$(pct config "$ctid" | grep -E "^net[0-9]:" | head -1)
+        if [[ -n "$iface" ]]; then
+            # Try to extract IP from the interface name
+            # This is a simple approach and might need adjustment for your setup
+            # You might need to check the actual bridge interface on the host
+            echo "Container $ctid ($name) has network config: $iface"
+            echo "Note: Manual IP detection from network config not implemented."
+            echo "      Consider installing iproute2 or net-tools in the container."
+        fi
+    fi
+
+    if [[ -n "$ip" ]]; then
+        echo "Adding LXC: $ip  $host"
+        echo "$ip    $host" >> $HOSTS_FILE
+    else
+        echo "Container $ctid ($name) - could not determine IP address."
+        echo "  Make sure the container has networking tools installed:"
+        echo "  For Debian/Ubuntu: apt-get install iproute2"
+        echo "  For Alpine: apk add iproute2"
+        echo "  For CentOS/RHEL: yum install iproute"
     fi
 done
 
