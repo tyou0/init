@@ -1,0 +1,2 @@
+alias born='f(){ command -v bun &> /dev/null && bun $@ || node $@; }; f'
+alias gitclean='git branch --merged origin/main | grep -vE "^\s*(\*|main|develop)" | xargs -n 1 git branch -d'  
