@@ -4,5 +4,5 @@ alias gitclean='git branch --merged origin/main | grep -vE "^\s*(\*|main|develop
 alias proxyon='export http_proxy="http://127.0.0.1:8889/"; export https_proxy="http://127.0.0.1:8889/"; export all_proxy="socks5h://127.0.0.1:1089"; export HTTP_PROXY="$http_proxy"; export HTTPS_PROXY="$https_proxy"; export ALL_PROXY="$all_proxy"; echo "Proxy ON (HTTP/HTTPS + SOCKS5)"'
 alias proxyoff='unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY; echo "Proxy OFF"'
 
-  alias ccyolo='claude --permission-mode bypassPermissions'
-  alias cch='claude -p --permission-mode bypassPermissions'
+alias ccyolo='claude --permission-mode bypassPermissions'
+alias cch='claude -p --permission-mode bypassPermissions'
