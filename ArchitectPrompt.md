@@ -46,6 +46,3 @@ Constraints:
 - Be evidence-based: cite files/paths for every key claim.
 - Prefer practical improvements over theoretical purity.
 - Keep recommendations incremental and low-risk first.
-
-If you want, I can also give you a second version specialized for Node.js/TypeScript monorepos only.
-
