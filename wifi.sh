@@ -1,16 +1,45 @@
 #!/bin/bash
 
-# wifi-cli.sh - A CLI tool to manage WiFi on macOS
-
-AIRPORT="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
-INTERFACE="en0"
-
-# Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+get_wifi_interface() {
+    local iface
+    iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi|AirPort/{getline; print $2}')
+    echo "${iface:-en0}"
+}
+
+INTERFACE=$(get_wifi_interface)
+
+get_current_ssid() {
+    local ssid=""
+
+    # Method 1: networksetup (works on older macOS)
+    local raw
+    raw=$(networksetup -getairportnetwork "$INTERFACE" 2>/dev/null)
+    if ! echo "$raw" | grep -qi "not associated\|no network"; then
+        ssid=$(echo "$raw" | sed 's/^.*: //')
+    fi
+
+    # Method 2: ipconfig getsummary (works on macOS Sonoma+)
+    if [ -z "$ssid" ]; then
+        ssid=$(ipconfig getsummary "$INTERFACE" 2>/dev/null | awk -F': ' '/  SSID : /{print $2}')
+    fi
+
+    # Method 3: system_profiler (slowest but most reliable)
+    if [ -z "$ssid" ]; then
+        ssid=$(system_profiler SPAirPortDataType 2>/dev/null | awk '/Current Network Information:/{getline; gsub(/^ +| *:$/,""); print; exit}')
+    fi
+
+    echo "$ssid"
+}
+
+get_ip_address() {
+    ipconfig getifaddr "$INTERFACE" 2>/dev/null
+}
 
 usage() {
     echo -e "${CYAN}WiFi CLI for macOS${NC}"
@@ -29,7 +58,6 @@ usage() {
     echo "  saved               List saved/known networks"
     echo "  forget <SSID>       Forget a saved network"
     echo "  help                Show this help message"
-    echo ""
 }
 
 wifi_status() {
@@ -38,17 +66,20 @@ wifi_status() {
 
     if echo "$power" | grep -q "On"; then
         echo -e "WiFi Power: ${GREEN}On${NC}"
+        echo -e "Interface:  ${CYAN}${INTERFACE}${NC}"
+
         local ssid
-        ssid=$(networksetup -getairportnetwork "$INTERFACE" 2>/dev/null | sed 's/Current Wi-Fi Network: //')
-        if [ -n "$ssid" ] && [ "$ssid" != "You are not associated with an AirPort network." ]; then
-            echo -e "Connected to: ${GREEN}${ssid}${NC}"
+        ssid=$(get_current_ssid)
+
+        if [ -n "$ssid" ]; then
+            echo -e "Connected:  ${GREEN}${ssid}${NC}"
             local ip
-            ip=$(ipconfig getifaddr "$INTERFACE" 2>/dev/null)
+            ip=$(get_ip_address)
             if [ -n "$ip" ]; then
                 echo -e "IP Address: ${CYAN}${ip}${NC}"
             fi
         else
-            echo -e "Connected to: ${RED}Not connected${NC}"
+            echo -e "Connected:  ${RED}Not connected${NC}"
         fi
     else
         echo -e "WiFi Power: ${RED}Off${NC}"
@@ -58,41 +89,43 @@ wifi_status() {
 wifi_on() {
     echo "Turning WiFi on..."
     networksetup -setairportpower "$INTERFACE" on
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}WiFi is now on${NC}"
-    else
-        echo -e "${RED}Failed to turn on WiFi${NC}"
-        exit 1
-    fi
+    sleep 2
+    echo -e "${GREEN}WiFi is on${NC}"
+    wifi_status
 }
 
 wifi_off() {
     echo "Turning WiFi off..."
     networksetup -setairportpower "$INTERFACE" off
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}WiFi is now off${NC}"
-    else
-        echo -e "${RED}Failed to turn off WiFi${NC}"
-        exit 1
-    fi
+    sleep 1
+    echo -e "${RED}WiFi is off${NC}"
 }
 
 wifi_scan() {
     echo -e "${CYAN}Scanning for networks...${NC}"
     echo ""
 
-    # Try the modern approach first (macOS Ventura+)
-    if command -v wdutil &>/dev/null; then
-        "$AIRPORT" -s 2>/dev/null || {
-            echo -e "${YELLOW}Using system_profiler fallback...${NC}"
-            system_profiler SPAirPortDataType 2>/dev/null | grep -A 2 "Other Local Wi-Fi Networks" || \
-            networksetup -listpreferredwirelessnetworks "$INTERFACE" 2>/dev/null
-        }
+    local airport="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+
+    if [ -x "$airport" ]; then
+        "$airport" -s 2>/dev/null
     else
-        "$AIRPORT" -s 2>/dev/null || {
-            echo -e "${YELLOW}Airport utility not available. Using networksetup...${NC}"
-            networksetup -listpreferredwirelessnetworks "$INTERFACE" 2>/dev/null
-        }
+        # Fallback: use system_profiler
+        echo -e "${YELLOW}Note: Using system_profiler (slower). 'airport' tool not available.${NC}"
+        echo ""
+        system_profiler SPAirPortDataType 2>/dev/null | awk '
+        /Other Local Wi-Fi Networks:/,0 {
+            if (/^ {16}[^ ]/) {
+                gsub(/^ +| *:$/, "")
+                name=$0
+            }
+            if (/PHY Mode/) { phy=$NF }
+            if (/Channel:/) { ch=$NF }
+            if (/Signal \/ Noise/) {
+                sig=$NF
+                printf "%-35s  Channel: %-6s  Signal: %s  PHY: %s\n", name, ch, sig, phy
+            }
+        }'
     fi
 }
 
@@ -101,66 +134,58 @@ wifi_connect() {
     local password="$2"
 
     if [ -z "$ssid" ]; then
-        echo -e "${RED}Error: Please provide a network name (SSID)${NC}"
-        echo "Usage: $(basename "$0") connect <SSID> [password]"
+        echo -e "${RED}Error: Provide an SSID${NC}"
+        echo "Usage: wifi connect <SSID> [password]"
         exit 1
     fi
 
-    # Ensure WiFi is on
-    local power
-    power=$(networksetup -getairportpower "$INTERFACE" 2>/dev/null)
-    if echo "$power" | grep -q "Off"; then
-        echo "WiFi is off. Turning it on..."
-        networksetup -setairportpower "$INTERFACE" on
-        sleep 2
-    fi
-
-    # If no password provided, prompt for it
     if [ -z "$password" ]; then
-        echo -n "Enter password for '${ssid}' (leave empty for open network): "
+        echo -n "Password for '${ssid}': "
         read -s password
         echo ""
     fi
 
-    echo -e "Connecting to ${CYAN}${ssid}${NC}..."
+    echo -e "Connecting to ${YELLOW}${ssid}${NC}..."
+    networksetup -setairportnetwork "$INTERFACE" "$ssid" "$password" 2>/dev/null
 
-    if [ -z "$password" ]; then
-        networksetup -setairportnetwork "$INTERFACE" "$ssid" 2>/dev/null
-    else
-        networksetup -setairportnetwork "$INTERFACE" "$ssid" "$password" 2>/dev/null
-    fi
-
-    if [ $? -eq 0 ]; then
-        # Verify connection
+    # Wait and retry detection multiple times
+    local connected=""
+    for i in 1 2 3 4 5; do
         sleep 2
-        local current_ssid
-        current_ssid=$(networksetup -getairportnetwork "$INTERFACE" 2>/dev/null | sed 's/Current Wi-Fi Network: //')
-        if [ "$current_ssid" = "$ssid" ]; then
-            echo -e "${GREEN}Successfully connected to '${ssid}'${NC}"
-            local ip
-            ip=$(ipconfig getifaddr "$INTERFACE" 2>/dev/null)
-            if [ -n "$ip" ]; then
-                echo -e "IP Address: ${CYAN}${ip}${NC}"
-            fi
-        else
-            echo -e "${RED}Connection may have failed. Current network: ${current_ssid}${NC}"
-            exit 1
+        connected=$(get_current_ssid)
+        if [ -n "$connected" ]; then
+            break
+        fi
+    done
+
+    if [ -n "$connected" ]; then
+        echo -e "${GREEN}Connected to ${connected}${NC}"
+        local ip
+        ip=$(get_ip_address)
+        if [ -n "$ip" ]; then
+            echo -e "IP Address: ${CYAN}${ip}${NC}"
         fi
     else
-        echo -e "${RED}Failed to connect to '${ssid}'${NC}"
-        echo "Check your password and network name."
+        echo -e "${RED}Connection may have failed.${NC}"
+        echo ""
+        echo "Troubleshooting:"
+        echo "  1. Check SSID and password are correct (case-sensitive)"
+        echo "  2. wifi forget \"${ssid}\" && wifi connect \"${ssid}\""
+        echo "  3. wifi off && sleep 2 && wifi on && sleep 3 && wifi connect \"${ssid}\""
         exit 1
     fi
 }
 
 wifi_disconnect() {
-    echo "Disconnecting from WiFi..."
-    sudo "$AIRPORT" -z 2>/dev/null || {
-        # Fallback: turn off and on
-        networksetup -setairportpower "$INTERFACE" off
+    echo "Disconnecting..."
+    local airport="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+    if [ -x "$airport" ]; then
+        sudo "$airport" -z 2>/dev/null
+    else
+        sudo networksetup -setairportpower "$INTERFACE" off
         sleep 1
         networksetup -setairportpower "$INTERFACE" on
-    }
+    fi
     echo -e "${GREEN}Disconnected${NC}"
 }
 
@@ -170,80 +195,76 @@ wifi_info() {
     wifi_status
     echo ""
 
-    echo -e "${CYAN}--- Network Details ---${NC}"
-    "$AIRPORT" -I 2>/dev/null || {
-        echo "Interface: $INTERFACE"
-        networksetup -getairportnetwork "$INTERFACE" 2>/dev/null
-        echo "DNS Servers:"
-        networksetup -getdnsservers Wi-Fi 2>/dev/null
-        echo "Proxy Settings:"
-        networksetup -getwebproxy Wi-Fi 2>/dev/null
-    }
+    local ssid
+    ssid=$(get_current_ssid)
 
+    if [ -n "$ssid" ]; then
+        echo -e "${CYAN}--- Connection Details ---${NC}"
+
+        # Get extra info from ipconfig
+        local summary
+        summary=$(ipconfig getsummary "$INTERFACE" 2>/dev/null)
+
+        if [ -n "$summary" ]; then
+            local bssid channel security
+            bssid=$(echo "$summary" | awk -F': ' '/  BSSID :/{print $2}')
+            channel=$(echo "$summary" | awk -F': ' '/  Channel :/{print $2}')
+            security=$(echo "$summary" | awk -F': ' '/  Security :/{print $2}')
+
+            [ -n "$bssid" ] && echo -e "BSSID:      ${bssid}"
+            [ -n "$channel" ] && echo -e "Channel:    ${channel}"
+            [ -n "$security" ] && echo -e "Security:   ${security}"
+        fi
+
+        # Get signal info from system_profiler
+        local signal
+        signal=$(system_profiler SPAirPortDataType 2>/dev/null | awk '/Current Network Information:/,/Other Local Wi-Fi Networks:/' | grep "Signal / Noise" | awk -F': ' '{print $2}')
+        [ -n "$signal" ] && echo -e "Signal:     ${signal}"
+
+        echo ""
+    fi
+
+    echo -e "${CYAN}--- DNS ---${NC}"
+    networksetup -getdnsservers Wi-Fi 2>/dev/null
     echo ""
-    echo -e "${CYAN}--- Hardware Address ---${NC}"
+
+    echo -e "${CYAN}--- MAC Address ---${NC}"
     networksetup -getmacaddress "$INTERFACE" 2>/dev/null
+    echo ""
+
+    echo -e "${CYAN}--- Gateway ---${NC}"
+    netstat -rn 2>/dev/null | grep "^default.*${INTERFACE}" | head -1
 }
 
 wifi_saved() {
     echo -e "${CYAN}Saved/Preferred Networks:${NC}"
-    echo ""
     networksetup -listpreferredwirelessnetworks "$INTERFACE" 2>/dev/null
 }
 
 wifi_forget() {
     local ssid="$1"
     if [ -z "$ssid" ]; then
-        echo -e "${RED}Error: Please provide a network name (SSID) to forget${NC}"
+        echo -e "${RED}Error: Provide SSID to forget${NC}"
         exit 1
     fi
-
-    echo -e "Forgetting network '${YELLOW}${ssid}${NC}'..."
+    echo -e "Forgetting '${YELLOW}${ssid}${NC}'..."
     sudo networksetup -removepreferredwirelessnetwork "$INTERFACE" "$ssid" 2>/dev/null
-
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Successfully removed '${ssid}' from saved networks${NC}"
-    else
-        echo -e "${RED}Failed to remove '${ssid}'. You may need sudo.${NC}"
-        exit 1
-    fi
+    echo -e "${GREEN}Done${NC}"
 }
 
-# --- Main ---
 case "${1}" in
-    status)
-        wifi_status
-        ;;
-    on)
-        wifi_on
-        ;;
-    off)
-        wifi_off
-        ;;
-    scan)
-        wifi_scan
-        ;;
-    connect)
-        wifi_connect "$2" "$3"
-        ;;
-    disconnect)
-        wifi_disconnect
-        ;;
-    info)
-        wifi_info
-        ;;
-    saved)
-        wifi_saved
-        ;;
-    forget)
-        wifi_forget "$2"
-        ;;
-    help|--help|-h|"")
-        usage
-        ;;
+    status)      wifi_status ;;
+    on)          wifi_on ;;
+    off)         wifi_off ;;
+    scan)        wifi_scan ;;
+    connect)     wifi_connect "$2" "$3" ;;
+    disconnect)  wifi_disconnect ;;
+    info)        wifi_info ;;
+    saved)       wifi_saved ;;
+    forget)      wifi_forget "$2" ;;
+    help|--help|-h|"") usage ;;
     *)
         echo -e "${RED}Unknown command: ${1}${NC}"
-        echo ""
         usage
         exit 1
         ;;
