@@ -13,7 +13,8 @@ delete_lines() {
     local pattern="$1"
     local file="$2"
     [ ! -f "$file" ] && touch "$file"
-    grep -vF "$pattern" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    grep -vF "$pattern" "$file" > "${file}.tmp" || true
+    mv "${file}.tmp" "$file"
 }
 
 echo "=== Installing dependencies ==="

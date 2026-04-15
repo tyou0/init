@@ -1,0 +1,15 @@
+[user]
+	email = email.tomyou@gmail.com
+	name = Tom You
+
+[credential "https://github.com"]
+	username = tyou0
+
+[credential "https://gitea.thetomyou.com"]
+	username = mistercorea
+
+[credential "https://gitlab.com"]
+	username = prompteduser
+
+[credential "https://gitea.mistercorea.com"]
+	username = mistercorea

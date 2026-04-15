@@ -1,0 +1,515 @@
+---
+- name: Bootstrap local workstation
+  hosts: local
+  gather_facts: true
+
+  vars_prompt:
+    - name: config_mode
+      prompt: "Use repo-managed files by symlink or copy?"
+      default: "symlink"
+      private: false
+    - name: install_packages
+      prompt: "Install base packages: bash, ca-certificates, curl, wget, git, jq, tmux, zsh?"
+      default: "yes"
+      private: false
+    - name: install_optional_packages
+      prompt: "Install optional OS packages used by aliases: aria2?"
+      default: "yes"
+      private: false
+    - name: install_mise_direnv
+      prompt: "Install mise and direnv? direnv will be installed through mise."
+      default: "yes"
+      private: false
+    - name: trust_mise_config
+      prompt: "Trust your existing global mise config if one exists?"
+      default: "yes"
+      private: false
+    - name: install_helper_scripts
+      prompt: "Install helper scripts: wifi, updateProxmoxGuestIp, newt_service?"
+      default: "yes"
+      private: false
+    - name: install_aliases
+      prompt: "Install aliases and source them from ~/.zshrc and ~/.bashrc?"
+      default: "yes"
+      private: false
+    - name: install_profiles
+      prompt: "Install shell, git, p10k, and mise profile/config files from this repo?"
+      default: "yes"
+      private: false
+    - name: install_tmux
+      prompt: "Install ~/.tmux.conf, tpack, and tmux plugins?"
+      default: "yes"
+      private: false
+    - name: install_zsh_theme
+      prompt: "Install Zim and Powerlevel10k?"
+      default: "yes"
+      private: false
+
+  vars:
+    repo_root: "{{ playbook_dir }}"
+    home_dir: "{{ ansible_facts.env.HOME }}"
+    bin_dir: "{{ ansible_facts.env.HOME }}/.local/bin"
+    aliases_file: "{{ ansible_facts.env.HOME }}/.aliases"
+    tmux_plugin_dir: "{{ ansible_facts.env.HOME }}/.tmux/plugins"
+    tpack_dir: "{{ tmux_plugin_dir }}/tpm"
+    mise_config_file: "{{ ansible_facts.env.XDG_CONFIG_HOME | default(ansible_facts.env.HOME + '/.config') }}/mise/config.toml"
+    base_packages:
+      - bash
+      - ca-certificates
+      - curl
+      - wget
+      - git
+      - jq
+      - tmux
+      - zsh
+    optional_packages:
+      - aria2
+    tmux_plugins:
+      - tmux-sensible
+      - tmux-resurrect
+      - tmux-continuum
+    helper_scripts:
+      - src: wifi.sh
+        dest: wifi
+      - src: updateProxmoxGuestIp.sh
+        dest: updateProxmoxGuestIp
+      - src: newt_service.sh
+        dest: newt_service
+    home_dotfiles:
+      - src: dotfiles/zshrc
+        dest: .zshrc
+      - src: dotfiles/bashrc
+        dest: .bashrc
+      - src: dotfiles/profile
+        dest: .profile
+      - src: dotfiles/p10k.zsh
+        dest: .p10k.zsh
+      - src: dotfiles/gitconfig
+        dest: .gitconfig
+    xdg_config_files:
+      - src: config/mise/config.toml
+        dest: mise/config.toml
+      - src: config/git/ignore
+        dest: git/ignore
+
+  pre_tasks:
+    - name: Validate config mode
+      ansible.builtin.assert:
+        that:
+          - config_mode in ['symlink', 'copy']
+        fail_msg: "config_mode must be symlink or copy"
+
+    - name: Show install summary
+      ansible.builtin.debug:
+        msg:
+          - "File mode: {{ config_mode }}"
+          - "Packages: {{ install_packages }}"
+          - "Optional packages: {{ install_optional_packages }}"
+          - "Mise + direnv: {{ install_mise_direnv }}"
+          - "Trust mise config: {{ trust_mise_config }}"
+          - "Helper scripts: {{ install_helper_scripts }} -> {{ bin_dir }}"
+          - "Aliases: {{ install_aliases }} -> {{ aliases_file }}"
+          - "Profiles/configs: {{ install_profiles }}"
+          - "Tmux/tpack: {{ install_tmux }} -> {{ tmux_plugin_dir }}"
+          - "Zim + p10k: {{ install_zsh_theme }}"
+
+    - name: Confirm installation
+      ansible.builtin.pause:
+        prompt: "Start installation with these answers? Type yes to continue"
+      register: install_confirmation
+      when: confirm_install is not defined
+
+    - name: Stop before making changes
+      ansible.builtin.meta: end_play
+      when: (install_confirmation.user_input | default(confirm_install | default('no')) | lower) != 'yes'
+
+  tasks:
+    - name: Install base packages on Linux
+      ansible.builtin.package:
+        name: "{{ base_packages }}"
+        state: present
+      become: true
+      when:
+        - install_packages | bool
+        - ansible_facts.system != 'Darwin'
+
+    - name: Install optional packages on Linux
+      ansible.builtin.package:
+        name: "{{ item }}"
+        state: present
+      become: true
+      loop: "{{ optional_packages }}"
+      failed_when: false
+      when:
+        - install_packages | bool
+        - install_optional_packages | bool
+        - ansible_facts.system != 'Darwin'
+
+    - name: Check for Homebrew on macOS
+      ansible.builtin.command: sh -lc 'command -v brew'
+      changed_when: false
+      failed_when: false
+      register: brew_check
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Darwin'
+
+    - name: Install base packages on macOS
+      ansible.builtin.shell: |
+        if brew list --formula "{{ item }}" >/dev/null 2>&1; then
+          exit 0
+        fi
+        brew install "{{ item }}"
+        echo "__changed__"
+      loop: "{{ base_packages }}"
+      register: brew_base_install
+      changed_when: "'__changed__' in brew_base_install.stdout"
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.rc == 0
+
+    - name: Install optional packages on macOS
+      ansible.builtin.shell: |
+        if brew list --formula "{{ item }}" >/dev/null 2>&1; then
+          exit 0
+        fi
+        brew install "{{ item }}"
+        echo "__changed__"
+      loop: "{{ optional_packages }}"
+      register: brew_optional_install
+      changed_when: "'__changed__' in brew_optional_install.stdout"
+      failed_when: false
+      when:
+        - install_packages | bool
+        - install_optional_packages | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.rc == 0
+
+    - name: Create local bin directory
+      ansible.builtin.file:
+        path: "{{ bin_dir }}"
+        state: directory
+        mode: "0755"
+      when: install_helper_scripts | bool or install_mise_direnv | bool
+
+    - name: Install helper scripts by symlink
+      ansible.builtin.file:
+        src: "{{ repo_root }}/{{ item.src }}"
+        dest: "{{ bin_dir }}/{{ item.dest }}"
+        state: link
+        force: true
+      loop: "{{ helper_scripts }}"
+      when:
+        - install_helper_scripts | bool
+        - config_mode == 'symlink'
+
+    - name: Install helper scripts by copy
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/{{ item.src }}"
+        dest: "{{ bin_dir }}/{{ item.dest }}"
+        mode: "0755"
+      loop: "{{ helper_scripts }}"
+      when:
+        - install_helper_scripts | bool
+        - config_mode == 'copy'
+
+    - name: Install aliases by symlink
+      ansible.builtin.file:
+        src: "{{ repo_root }}/alias"
+        dest: "{{ aliases_file }}"
+        state: link
+        force: true
+      when:
+        - install_aliases | bool
+        - config_mode == 'symlink'
+
+    - name: Install aliases by copy
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/alias"
+        dest: "{{ aliases_file }}"
+        mode: "0644"
+      when:
+        - install_aliases | bool
+        - config_mode == 'copy'
+
+    - name: Install home profile files by symlink
+      ansible.builtin.file:
+        src: "{{ repo_root }}/{{ item.src }}"
+        dest: "{{ home_dir }}/{{ item.dest }}"
+        state: link
+        force: true
+      loop: "{{ home_dotfiles }}"
+      when:
+        - install_profiles | bool
+        - config_mode == 'symlink'
+
+    - name: Install home profile files by copy
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/{{ item.src }}"
+        dest: "{{ home_dir }}/{{ item.dest }}"
+        mode: "0644"
+      loop: "{{ home_dotfiles }}"
+      when:
+        - install_profiles | bool
+        - config_mode == 'copy'
+
+    - name: Create XDG config directories
+      ansible.builtin.file:
+        path: "{{ home_dir }}/.config/{{ item.dest | dirname }}"
+        state: directory
+        mode: "0755"
+      loop: "{{ xdg_config_files }}"
+      when: install_profiles | bool
+
+    - name: Install XDG config files by symlink
+      ansible.builtin.file:
+        src: "{{ repo_root }}/{{ item.src }}"
+        dest: "{{ home_dir }}/.config/{{ item.dest }}"
+        state: link
+        force: true
+      loop: "{{ xdg_config_files }}"
+      when:
+        - install_profiles | bool
+        - config_mode == 'symlink'
+
+    - name: Install XDG config files by copy
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/{{ item.src }}"
+        dest: "{{ home_dir }}/.config/{{ item.dest }}"
+        mode: "0644"
+      loop: "{{ xdg_config_files }}"
+      when:
+        - install_profiles | bool
+        - config_mode == 'copy'
+
+    - name: Source aliases from shell rc files
+      ansible.builtin.blockinfile:
+        path: "{{ item }}"
+        create: true
+        marker: "# {mark} init aliases"
+        block: |
+          [ -f "{{ aliases_file }}" ] && . "{{ aliases_file }}"
+      loop:
+        - "{{ home_dir }}/.zshrc"
+        - "{{ home_dir }}/.bashrc"
+      when: install_aliases | bool
+
+    - name: Install tmux config by symlink
+      ansible.builtin.file:
+        src: "{{ repo_root }}/.tmux.conf"
+        dest: "{{ home_dir }}/.tmux.conf"
+        state: link
+        force: true
+      when:
+        - install_tmux | bool
+        - config_mode == 'symlink'
+
+    - name: Install tmux config by copy
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/.tmux.conf"
+        dest: "{{ home_dir }}/.tmux.conf"
+        mode: "0644"
+      when:
+        - install_tmux | bool
+        - config_mode == 'copy'
+
+    - name: Create tmux plugin directory
+      ansible.builtin.file:
+        path: "{{ tmux_plugin_dir }}"
+        state: directory
+        mode: "0755"
+      when: install_tmux | bool
+
+    - name: Install or update tpack
+      ansible.builtin.git:
+        repo: https://github.com/tmuxpack/tpack
+        dest: "{{ tpack_dir }}"
+        update: true
+      when: install_tmux | bool
+
+    - name: Check tmux plugin directories
+      ansible.builtin.stat:
+        path: "{{ tmux_plugin_dir }}/{{ item }}"
+      loop: "{{ tmux_plugins }}"
+      register: tmux_plugin_stats
+      when: install_tmux | bool
+
+    - name: Install tmux plugins through tpack
+      ansible.builtin.command: "{{ tpack_dir }}/bin/install_plugins"
+      register: tpack_install
+      changed_when: "'download success' in tpack_install.stdout"
+      when:
+        - install_tmux | bool
+        - tmux_plugin_stats.results | selectattr('stat.exists', 'equalto', false) | list | length > 0
+
+    - name: Check for running tmux server
+      ansible.builtin.command: tmux has-session
+      changed_when: false
+      failed_when: false
+      register: tmux_has_session
+      when: install_tmux | bool
+
+    - name: Source tmux config
+      ansible.builtin.command: "tmux source-file {{ home_dir }}/.tmux.conf"
+      changed_when: false
+      when:
+        - install_tmux | bool
+        - tmux_has_session.rc == 0
+
+    - name: Check for mise
+      ansible.builtin.command: sh -lc 'command -v mise'
+      changed_when: false
+      failed_when: false
+      register: mise_check
+      when: install_mise_direnv | bool
+
+    - name: Install mise if missing
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL https://mise.run
+        else
+          wget -qO- https://mise.run
+        fi | MISE_INSTALL_PATH="{{ bin_dir }}/mise" sh
+      args:
+        executable: /bin/bash
+        creates: "{{ bin_dir }}/mise"
+      when:
+        - install_mise_direnv | bool
+        - mise_check.rc != 0
+
+    - name: Set mise binary path
+      ansible.builtin.set_fact:
+        mise_bin: "{{ mise_check.stdout if mise_check.rc == 0 else bin_dir + '/mise' }}"
+      when: install_mise_direnv | bool
+
+    - name: Check global mise config
+      ansible.builtin.stat:
+        path: "{{ mise_config_file }}"
+      register: mise_config_stat
+      when: install_mise_direnv | bool
+
+    - name: Trust existing global mise config
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - trust
+          - -y
+          - "{{ mise_config_file }}"
+      changed_when: false
+      when:
+        - install_mise_direnv | bool
+        - trust_mise_config | bool
+        - mise_config_stat.stat.exists
+
+    - name: Check global direnv mise entry
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - ls
+          - -g
+          - --current
+          - --no-header
+          - direnv
+      changed_when: false
+      failed_when: false
+      register: mise_direnv_entry
+      when: install_mise_direnv | bool
+
+    - name: Install direnv through mise
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - use
+          - -g
+          - --yes
+          - direnv@latest
+      register: mise_use_direnv
+      changed_when: "'direnv' not in (mise_direnv_entry.stdout | default(''))"
+      when:
+        - install_mise_direnv | bool
+        - "'direnv' not in (mise_direnv_entry.stdout | default(''))"
+
+    - name: Add mise and direnv shell hooks
+      ansible.builtin.blockinfile:
+        path: "{{ item.path }}"
+        create: true
+        marker: "# {mark} init mise and direnv"
+        block: |
+          command -v mise >/dev/null 2>&1 && eval "$(mise activate {{ item.shell }})"
+          command -v direnv >/dev/null 2>&1 && eval "$(direnv hook {{ item.shell }})"
+      loop:
+        - path: "{{ home_dir }}/.zshrc"
+          shell: zsh
+        - path: "{{ home_dir }}/.bashrc"
+          shell: bash
+      when: install_mise_direnv | bool
+
+    - name: Check Zim install
+      ansible.builtin.stat:
+        path: "{{ home_dir }}/.zim/zimfw.zsh"
+      register: zimfw_stat
+      when: install_zsh_theme | bool
+
+    - name: Install Zim if missing
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL https://raw.githubusercontent.com/zimfw/install/master/install.zsh
+        else
+          wget -qO- https://raw.githubusercontent.com/zimfw/install/master/install.zsh
+        fi | zsh
+      args:
+        executable: /bin/bash
+        creates: "{{ home_dir }}/.zim/zimfw.zsh"
+      when:
+        - install_zsh_theme | bool
+        - not zimfw_stat.stat.exists
+
+    - name: Ensure .zimrc exists
+      ansible.builtin.file:
+        path: "{{ home_dir }}/.zimrc"
+        state: touch
+        mode: "0644"
+        modification_time: preserve
+        access_time: preserve
+      when: install_zsh_theme | bool
+
+    - name: Enable Powerlevel10k Zim module
+      ansible.builtin.lineinfile:
+        path: "{{ home_dir }}/.zimrc"
+        regexp: '^zmodule powerlevel10k$'
+        line: zmodule powerlevel10k
+        create: true
+        mode: "0644"
+      when: install_zsh_theme | bool
+
+    - name: Install or update Powerlevel10k module
+      ansible.builtin.git:
+        repo: https://github.com/romkatv/powerlevel10k.git
+        dest: "{{ home_dir }}/.zim/modules/powerlevel10k"
+        depth: 1
+        update: true
+      when: install_zsh_theme | bool
+
+    - name: Add Zim initialization to zshrc
+      ansible.builtin.blockinfile:
+        path: "{{ home_dir }}/.zshrc"
+        create: true
+        marker: "# {mark} init zim"
+        block: |
+          export ZIM_HOME="${ZDOTDIR:-$HOME}/.zim"
+          [ -f "$ZIM_HOME/zimfw.zsh" ] && source "$ZIM_HOME/zimfw.zsh" init -q
+      when: install_zsh_theme | bool
+
+    - name: Add Powerlevel10k auto-config to zshrc
+      ansible.builtin.blockinfile:
+        path: "{{ home_dir }}/.zshrc"
+        create: true
+        marker: "# {mark} init p10k configure"
+        block: |
+          if [ ! -f "$HOME/.p10k.zsh" ] && command -v p10k >/dev/null 2>&1; then
+            (sleep 1; p10k configure) &
+          fi
+      when: install_zsh_theme | bool

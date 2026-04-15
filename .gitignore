@@ -1,0 +1,51 @@
+# Local agent/runtime state
+.codex
+.codex/
+
+# Local overrides and secrets
+.env
+.env.*
+.envrc
+.envrc.*
+!.envrc.example
+*.local
+*.secret
+*.secrets
+*.token
+*.tokens
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+*.kubeconfig
+secrets/
+private/
+auth/
+tokens/
+sessions/
+
+# Common auth/session files copied by accident
+*.sqlite
+*.sqlite3
+*.db
+*.session
+*.cookies
+cookies.txt
+netrc
+.netrc
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Generated backups from init.sh
+*.bak-*
+backups/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

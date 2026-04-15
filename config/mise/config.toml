@@ -1,0 +1,13 @@
+[tools]
+ansible = { version = "latest", pipx_args = "--include-deps", uvx = "false" }
+bat = "latest"
+bun = "latest"
+dart = { version = "latest", url = "https://storage.googleapis.com/dart-archive/channels/stable/release/{{ version }}/sdk/dartsdk-{{ os() }}-{{ arch() }}-release.zip", version_list_url = "https://storage.googleapis.com/storage/v1/b/dart-archive/o?prefix=channels/stable/release/&delimiter=/", version_regex = 'channels/stable/release/(\d+\.\d+\.\d+)/' }
+direnv = "latest"
+go = "latest"
+neovim = "latest"
+node = "lts"
+python = "latest"
+rust = "latest"
+uv = "latest"
+yt-dlp = "latest"
