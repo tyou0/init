@@ -3,17 +3,28 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MISE_BIN="${MISE_BIN:-}"
+PYTHON_MISE_VERSION="${PYTHON_MISE_VERSION:-lts}"
+PYTHON_PRECOMPILED_FLAVOR="${PYTHON_PRECOMPILED_FLAVOR:-install_only}"
+PYTHON_LTS_VERSION="${PYTHON_LTS_VERSION:-3.13}"
+AUTO_YES=0
+declare -a ANSIBLE_ARGS=()
 
 has() {
     command -v "$1" >/dev/null 2>&1
 }
 
-sudo_if_needed() {
-    if [ "$(id -u)" -eq 0 ]; then
-        "$@"
-    else
-        sudo "$@"
-    fi
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -y|--yes)
+                AUTO_YES=1
+                ;;
+            *)
+                ANSIBLE_ARGS+=("$1")
+                ;;
+        esac
+        shift
+    done
 }
 
 ensure_fetcher() {
@@ -21,26 +32,8 @@ ensure_fetcher() {
         return
     fi
 
-    if has apt-get; then
-        sudo_if_needed apt-get update
-        sudo_if_needed apt-get install -y curl
-    elif has dnf; then
-        sudo_if_needed dnf install -y curl
-    elif has yum; then
-        sudo_if_needed yum install -y curl
-    elif has pacman; then
-        sudo_if_needed pacman -Sy --needed --noconfirm curl
-    elif has zypper; then
-        sudo_if_needed zypper --non-interactive install curl
-    elif has apk; then
-        sudo_if_needed apk add --no-cache curl
-    elif [ "$(uname -s)" = "Darwin" ]; then
-        printf 'Neither curl nor wget is available. Install one and rerun this script.\n' >&2
-        exit 1
-    else
-        printf 'Neither curl nor wget is available, and this package manager is unsupported.\n' >&2
-        exit 1
-    fi
+    printf 'Neither curl nor wget is available. Install one and rerun this script.\n' >&2
+    exit 1
 }
 
 fetch_url() {
@@ -73,6 +66,7 @@ ensure_mise() {
 
 activate_mise() {
     eval "$("$MISE_BIN" activate bash)"
+    hash -r
 }
 
 trust_global_mise_config() {
@@ -83,7 +77,41 @@ trust_global_mise_config() {
     fi
 }
 
-ensure_uv() {
+ensure_mise_python_settings() {
+    local compile_value
+    local flavor_value
+
+    compile_value="$("$MISE_BIN" settings get python.compile 2>/dev/null || true)"
+    if [ "$compile_value" != "false" ]; then
+        "$MISE_BIN" settings set python.compile false
+    fi
+
+    flavor_value="$("$MISE_BIN" settings get python.precompiled_flavor 2>/dev/null || true)"
+    if [ "$flavor_value" != "$PYTHON_PRECOMPILED_FLAVOR" ]; then
+        "$MISE_BIN" settings set python.precompiled_flavor "$PYTHON_PRECOMPILED_FLAVOR"
+    fi
+}
+
+resolve_python_mise_version() {
+    if [ "$PYTHON_MISE_VERSION" = "lts" ]; then
+        printf '%s\n' "$PYTHON_LTS_VERSION"
+    else
+        printf '%s\n' "$PYTHON_MISE_VERSION"
+    fi
+}
+
+ensure_python() {
+    local resolved_python_version
+
+    ensure_mise_python_settings
+    resolved_python_version="$(resolve_python_mise_version)"
+
+    if ! "$MISE_BIN" which python3 >/dev/null 2>&1; then
+        "$MISE_BIN" use -g --yes "python@${resolved_python_version}"
+    fi
+
+    activate_mise
+
     if ! has uv; then
         "$MISE_BIN" use -g --yes uv@latest
         activate_mise
@@ -101,20 +129,40 @@ ensure_ansible() {
         return
     fi
 
-    "$MISE_BIN" use -g --yes ansible@latest
-    activate_mise
+    export PATH="$HOME/.local/bin:$PATH"
+    export PIPX_DEFAULT_PYTHON="$("$MISE_BIN" which python3)"
+    pipx install --python "$PIPX_DEFAULT_PYTHON" --include-deps ansible
 
     if ! has ansible-playbook; then
-        exec "$MISE_BIN" exec ansible@latest -- ansible-playbook -i "${ROOT_DIR}/inventory.ini" "${ROOT_DIR}/playbook.yml" "$@"
+        printf 'Failed to install ansible-playbook with pipx.\n' >&2
+        exit 1
     fi
 }
+
+parse_args "$@"
 
 ensure_fetcher
 ensure_mise
 trust_global_mise_config
 activate_mise
-ensure_uv
+ensure_python
 ensure_pipx
-ensure_ansible "$@"
+ensure_ansible "${ANSIBLE_ARGS[@]}"
 
-exec ansible-playbook -i "${ROOT_DIR}/inventory.ini" "${ROOT_DIR}/playbook.yml" "$@"
+if [ "$AUTO_YES" -eq 1 ]; then
+    ANSIBLE_ARGS+=(
+        -e config_mode=symlink
+        -e install_packages=yes
+        -e install_optional_packages=yes
+        -e install_mise_direnv=yes
+        -e trust_mise_config=yes
+        -e install_helper_scripts=yes
+        -e install_aliases=yes
+        -e install_profiles=yes
+        -e install_tmux=yes
+        -e install_zsh_theme=yes
+        -e confirm_install=yes
+    )
+fi
+
+exec ansible-playbook -i "${ROOT_DIR}/inventory.ini" "${ROOT_DIR}/playbook.yml" "${ANSIBLE_ARGS[@]}"

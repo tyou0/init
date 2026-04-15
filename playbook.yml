@@ -82,6 +82,8 @@
         dest: .bashrc
       - src: dotfiles/profile
         dest: .profile
+      - src: dotfiles/zimrc
+        dest: .zimrc
       - src: dotfiles/p10k.zsh
         dest: .p10k.zsh
       - src: dotfiles/gitconfig
@@ -467,24 +469,6 @@
         - install_zsh_theme | bool
         - not zimfw_stat.stat.exists
 
-    - name: Ensure .zimrc exists
-      ansible.builtin.file:
-        path: "{{ home_dir }}/.zimrc"
-        state: touch
-        mode: "0644"
-        modification_time: preserve
-        access_time: preserve
-      when: install_zsh_theme | bool
-
-    - name: Enable Powerlevel10k Zim module
-      ansible.builtin.lineinfile:
-        path: "{{ home_dir }}/.zimrc"
-        regexp: '^zmodule powerlevel10k$'
-        line: zmodule powerlevel10k
-        create: true
-        mode: "0644"
-      when: install_zsh_theme | bool
-
     - name: Install or update Powerlevel10k module
       ansible.builtin.git:
         repo: https://github.com/romkatv/powerlevel10k.git
@@ -493,6 +477,23 @@
         update: true
       when: install_zsh_theme | bool
 
+    - name: Build and sync Zim modules
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export ZIM_HOME="{{ home_dir }}/.zim"
+        [ -f "$ZIM_HOME/init.zsh" ] && source "$ZIM_HOME/init.zsh"
+        zimfw() { source "$ZIM_HOME/zimfw.zsh" "$@"; }
+        zimfw build
+        zimfw install
+        zimfw update
+      args:
+        executable: /bin/zsh
+      register: zimfw_sync
+      changed_when: false
+      when:
+        - install_zsh_theme | bool
+        - zimfw_stat.stat.exists
+
     - name: Add Zim initialization to zshrc
       ansible.builtin.blockinfile:
         path: "{{ home_dir }}/.zshrc"
@@ -500,7 +501,8 @@
         marker: "# {mark} init zim"
         block: |
           export ZIM_HOME="${ZDOTDIR:-$HOME}/.zim"
-          [ -f "$ZIM_HOME/zimfw.zsh" ] && source "$ZIM_HOME/zimfw.zsh" init -q
+          [ -f "$ZIM_HOME/init.zsh" ] && source "$ZIM_HOME/init.zsh"
+          [ -f "$ZIM_HOME/zimfw.zsh" ] && zimfw() { source "$ZIM_HOME/zimfw.zsh" "$@"; }
       when: install_zsh_theme | bool
 
     - name: Add Powerlevel10k auto-config to zshrc
