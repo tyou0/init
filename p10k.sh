@@ -5,6 +5,7 @@ ZDOT="${ZDOTDIR:-$HOME}"
 ZIM_HOME="$ZDOT/.zim"
 ZSHRC="$ZDOT/.zshrc"
 ZIMRC="$ZDOT/.zimrc"
+ZIMFW_VERSION="${ZIMFW_VERSION:-v1.20.0}"
 
 ### ------------------------------------------------------------
 ### Cross‑platform safe "delete matching lines" function
@@ -29,7 +30,12 @@ fi
 
 echo "=== Installing Zim if missing ==="
 if [ ! -d "$ZIM_HOME" ]; then
-    curl -fsSL https://raw.githubusercontent.com/zimfw/install/master/install.zsh | zsh
+    mkdir -p "$ZIM_HOME"
+fi
+
+if [ ! -f "$ZIM_HOME/zimfw.zsh" ]; then
+    curl -fsSL "https://github.com/zimfw/zimfw/releases/download/${ZIMFW_VERSION}/zimfw.zsh" -o "$ZIM_HOME/zimfw.zsh"
+    chmod 755 "$ZIM_HOME/zimfw.zsh"
 fi
 
 echo "=== Fixing .zimrc ==="

@@ -6,10 +6,10 @@
   vars_prompt:
     - name: config_mode
       prompt: "Use repo-managed files by symlink or copy?"
-      default: "symlink"
+      default: "copy"
       private: false
     - name: install_packages
-      prompt: "Install base packages: bash, ca-certificates, curl, wget, git, jq, tmux, zsh?"
+      prompt: "Install base packages: bash, ca-certificates, curl, wget, git, jq, tmux, zsh, zlib1g-dev, build-essential, libssl-dev, libyaml-dev, libreadline-dev, libffi-dev, autoconf, bison?"
       default: "yes"
       private: false
     - name: install_optional_packages
@@ -24,9 +24,17 @@
       prompt: "Trust your existing global mise config if one exists?"
       default: "yes"
       private: false
-    - name: install_helper_scripts
-      prompt: "Install helper scripts: wifi, updateProxmoxGuestIp, newt_service?"
-      default: "yes"
+    - name: install_wifi_helper
+      prompt: "Install the macOS wifi helper into ~/.local/bin?"
+      default: "no"
+      private: false
+    - name: install_proxmox_helper
+      prompt: "Install the Proxmox updateProxmoxGuestIp helper into ~/.local/bin?"
+      default: "no"
+      private: false
+    - name: install_newt_service_helper
+      prompt: "Install the newt_service helper into ~/.local/bin? This is only for manual post-install use after Newt is already installed."
+      default: "no"
       private: false
     - name: install_aliases
       prompt: "Install aliases and source them from ~/.zshrc and ~/.bashrc?"
@@ -53,6 +61,8 @@
     tmux_plugin_dir: "{{ ansible_facts.env.HOME }}/.tmux/plugins"
     tpack_dir: "{{ tmux_plugin_dir }}/tpm"
     mise_config_file: "{{ ansible_facts.env.XDG_CONFIG_HOME | default(ansible_facts.env.HOME + '/.config') }}/mise/config.toml"
+    zimfw_version: "v1.20.0"
+    zimfw_download_url: "https://github.com/zimfw/zimfw/releases/download/{{ zimfw_version }}/zimfw.zsh"
     base_packages:
       - bash
       - ca-certificates
@@ -62,19 +72,20 @@
       - jq
       - tmux
       - zsh
+      - zlib1g-dev
+      - build-essential
+      - libssl-dev
+      - libyaml-dev
+      - libreadline-dev
+      - libffi-dev
+      - autoconf
+      - bison
     optional_packages:
       - aria2
     tmux_plugins:
       - tmux-sensible
       - tmux-resurrect
       - tmux-continuum
-    helper_scripts:
-      - src: wifi.sh
-        dest: wifi
-      - src: updateProxmoxGuestIp.sh
-        dest: updateProxmoxGuestIp
-      - src: newt_service.sh
-        dest: newt_service
     home_dotfiles:
       - src: dotfiles/zshrc
         dest: .zshrc
@@ -101,6 +112,31 @@
           - config_mode in ['symlink', 'copy']
         fail_msg: "config_mode must be symlink or copy"
 
+    - name: Validate yes/no prompts
+      ansible.builtin.assert:
+        that:
+          - (lookup('vars', item) | lower) in ['yes', 'no']
+        fail_msg: "{{ item }} must be yes or no"
+      loop:
+        - install_packages
+        - install_optional_packages
+        - install_mise_direnv
+        - trust_mise_config
+        - install_wifi_helper
+        - install_proxmox_helper
+        - install_newt_service_helper
+        - install_aliases
+        - install_profiles
+        - install_tmux
+        - install_zsh_theme
+
+    - name: Validate non-interactive confirmation
+      ansible.builtin.assert:
+        that:
+          - (confirm_install | lower) in ['yes', 'no']
+        fail_msg: "confirm_install must be yes or no"
+      when: confirm_install is defined
+
     - name: Show install summary
       ansible.builtin.debug:
         msg:
@@ -109,7 +145,9 @@
           - "Optional packages: {{ install_optional_packages }}"
           - "Mise + direnv: {{ install_mise_direnv }}"
           - "Trust mise config: {{ trust_mise_config }}"
-          - "Helper scripts: {{ install_helper_scripts }} -> {{ bin_dir }}"
+          - "Wifi helper: {{ install_wifi_helper }} -> {{ bin_dir }}"
+          - "Proxmox helper: {{ install_proxmox_helper }} -> {{ bin_dir }}"
+          - "Newt service helper: {{ install_newt_service_helper }} -> {{ bin_dir }}"
           - "Aliases: {{ install_aliases }} -> {{ aliases_file }}"
           - "Profiles/configs: {{ install_profiles }}"
           - "Tmux/tpack: {{ install_tmux }} -> {{ tmux_plugin_dir }}"
@@ -188,33 +226,97 @@
         - ansible_facts.system == 'Darwin'
         - brew_check.rc == 0
 
+    - name: Require Homebrew for macOS package installation
+      ansible.builtin.fail:
+        msg: "Homebrew is required for macOS package installation. Install brew first or rerun with -e install_packages=no."
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.rc != 0
+
     - name: Create local bin directory
       ansible.builtin.file:
         path: "{{ bin_dir }}"
         state: directory
         mode: "0755"
-      when: install_helper_scripts | bool or install_mise_direnv | bool
+      when: install_wifi_helper | bool or install_proxmox_helper | bool or install_newt_service_helper | bool or install_mise_direnv | bool
 
-    - name: Install helper scripts by symlink
+    - name: Refuse wifi helper install outside macOS
+      ansible.builtin.fail:
+        msg: "wifi helper only supports macOS"
+      when:
+        - install_wifi_helper | bool
+        - ansible_facts.system != 'Darwin'
+
+    - name: Refuse newt service helper install outside Linux systemd hosts
+      ansible.builtin.fail:
+        msg: "newt_service helper is only supported on Linux hosts running systemd"
+      when:
+        - install_newt_service_helper | bool
+        - ansible_facts.system != 'Linux' or ansible_service_mgr != 'systemd'
+
+    - name: Install wifi helper by symlink
       ansible.builtin.file:
-        src: "{{ repo_root }}/{{ item.src }}"
-        dest: "{{ bin_dir }}/{{ item.dest }}"
+        src: "{{ repo_root }}/wifi.sh"
+        dest: "{{ bin_dir }}/wifi"
         state: link
         force: true
-      loop: "{{ helper_scripts }}"
       when:
-        - install_helper_scripts | bool
+        - install_wifi_helper | bool
+        - config_mode == 'symlink'
+        - ansible_facts.system == 'Darwin'
+
+    - name: Install wifi helper by copy
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/wifi.sh"
+        dest: "{{ bin_dir }}/wifi"
+        mode: "0755"
+      when:
+        - install_wifi_helper | bool
+        - config_mode == 'copy'
+        - ansible_facts.system == 'Darwin'
+
+    - name: Install Proxmox helper by symlink
+      ansible.builtin.file:
+        src: "{{ repo_root }}/updateProxmoxGuestIp.sh"
+        dest: "{{ bin_dir }}/updateProxmoxGuestIp"
+        state: link
+        force: true
+      when:
+        - install_proxmox_helper | bool
         - config_mode == 'symlink'
 
-    - name: Install helper scripts by copy
+    - name: Install Proxmox helper by copy
       ansible.builtin.copy:
-        src: "{{ repo_root }}/{{ item.src }}"
-        dest: "{{ bin_dir }}/{{ item.dest }}"
+        src: "{{ repo_root }}/updateProxmoxGuestIp.sh"
+        dest: "{{ bin_dir }}/updateProxmoxGuestIp"
         mode: "0755"
-      loop: "{{ helper_scripts }}"
       when:
-        - install_helper_scripts | bool
+        - install_proxmox_helper | bool
         - config_mode == 'copy'
+
+    - name: Install newt service helper by symlink
+      ansible.builtin.file:
+        src: "{{ repo_root }}/newt_service.sh"
+        dest: "{{ bin_dir }}/newt_service"
+        state: link
+        force: true
+      when:
+        - install_newt_service_helper | bool
+        - config_mode == 'symlink'
+        - ansible_facts.system == 'Linux'
+        - ansible_service_mgr == 'systemd'
+
+    - name: Install newt service helper by copy
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/newt_service.sh"
+        dest: "{{ bin_dir }}/newt_service"
+        mode: "0755"
+      when:
+        - install_newt_service_helper | bool
+        - config_mode == 'copy'
+        - ansible_facts.system == 'Linux'
+        - ansible_service_mgr == 'systemd'
 
     - name: Install aliases by symlink
       ansible.builtin.file:
@@ -295,7 +397,9 @@
       loop:
         - "{{ home_dir }}/.zshrc"
         - "{{ home_dir }}/.bashrc"
-      when: install_aliases | bool
+      when:
+        - install_aliases | bool
+        - not (config_mode == 'symlink' and install_profiles | bool)
 
     - name: Install tmux config by symlink
       ansible.builtin.file:
@@ -327,7 +431,7 @@
       ansible.builtin.git:
         repo: https://github.com/tmuxpack/tpack
         dest: "{{ tpack_dir }}"
-        update: true
+        update: false
       when: install_tmux | bool
 
     - name: Check tmux plugin directories
@@ -367,15 +471,26 @@
       when: install_mise_direnv | bool
 
     - name: Install mise if missing
-      ansible.builtin.shell: |
-        set -euo pipefail
-        if command -v curl >/dev/null 2>&1; then
-          curl -fsSL https://mise.run
-        else
-          wget -qO- https://mise.run
-        fi | MISE_INSTALL_PATH="{{ bin_dir }}/mise" sh
+      ansible.builtin.get_url:
+        url: https://mise.jdx.dev/install.sh
+        dest: "{{ bin_dir }}/mise-install.sh"
+        mode: "0755"
       args:
-        executable: /bin/bash
+        creates: "{{ bin_dir }}/mise-install.sh"
+      register: mise_installer_download
+      when:
+        - install_mise_direnv | bool
+        - mise_check.rc != 0
+
+    - name: Run pinned mise installer
+      ansible.builtin.command:
+        argv:
+          - sh
+          - "{{ bin_dir }}/mise-install.sh"
+      environment:
+        MISE_VERSION: "v2026.4.14"
+        MISE_INSTALL_PATH: "{{ bin_dir }}/mise"
+      args:
         creates: "{{ bin_dir }}/mise"
       when:
         - install_mise_direnv | bool
@@ -433,6 +548,29 @@
         - install_mise_direnv | bool
         - "'direnv' not in (mise_direnv_entry.stdout | default(''))"
 
+    - name: Upgrade installed mise tools
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - upgrade
+      register: mise_upgrade
+      changed_when: "'All tools are up to date' not in (mise_upgrade.stdout | default(''))"
+      when: install_mise_direnv | bool
+
+    - name: List installed mise tools
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - ls
+      changed_when: false
+      register: mise_ls
+      when: install_mise_direnv | bool
+
+    - name: Show mise status
+      ansible.builtin.debug:
+        msg: "{{ [mise_upgrade.stdout | default(''), 'Installed mise tools:'] + (mise_ls.stdout_lines | default([])) }}"
+      when: install_mise_direnv | bool
+
     - name: Add mise and direnv shell hooks
       ansible.builtin.blockinfile:
         path: "{{ item.path }}"
@@ -446,7 +584,9 @@
           shell: zsh
         - path: "{{ home_dir }}/.bashrc"
           shell: bash
-      when: install_mise_direnv | bool
+      when:
+        - install_mise_direnv | bool
+        - not (config_mode == 'symlink' and install_profiles | bool)
 
     - name: Check Zim install
       ansible.builtin.stat:
@@ -455,16 +595,20 @@
       when: install_zsh_theme | bool
 
     - name: Install Zim if missing
-      ansible.builtin.shell: |
-        set -euo pipefail
-        if command -v curl >/dev/null 2>&1; then
-          curl -fsSL https://raw.githubusercontent.com/zimfw/install/master/install.zsh
-        else
-          wget -qO- https://raw.githubusercontent.com/zimfw/install/master/install.zsh
-        fi | zsh
-      args:
-        executable: /bin/bash
-        creates: "{{ home_dir }}/.zim/zimfw.zsh"
+      ansible.builtin.file:
+        path: "{{ home_dir }}/.zim"
+        state: directory
+        mode: "0755"
+      when:
+        - install_zsh_theme | bool
+        - not zimfw_stat.stat.exists
+
+    - name: Download pinned Zim release asset
+      ansible.builtin.get_url:
+        url: "{{ zimfw_download_url }}"
+        dest: "{{ home_dir }}/.zim/zimfw.zsh"
+        mode: "0755"
+      register: zimfw_download
       when:
         - install_zsh_theme | bool
         - not zimfw_stat.stat.exists
@@ -474,14 +618,13 @@
         repo: https://github.com/romkatv/powerlevel10k.git
         dest: "{{ home_dir }}/.zim/modules/powerlevel10k"
         depth: 1
-        update: true
+        update: false
       when: install_zsh_theme | bool
 
     - name: Build and sync Zim modules
       ansible.builtin.shell: |
         set -euo pipefail
         export ZIM_HOME="{{ home_dir }}/.zim"
-        [ -f "$ZIM_HOME/init.zsh" ] && source "$ZIM_HOME/init.zsh"
         zimfw() { source "$ZIM_HOME/zimfw.zsh" "$@"; }
         zimfw build
         zimfw install
@@ -492,7 +635,7 @@
       changed_when: false
       when:
         - install_zsh_theme | bool
-        - zimfw_stat.stat.exists
+        - zimfw_stat.stat.exists or not (zimfw_download.skipped | default(false))
 
     - name: Add Zim initialization to zshrc
       ansible.builtin.blockinfile:
@@ -503,7 +646,9 @@
           export ZIM_HOME="${ZDOTDIR:-$HOME}/.zim"
           [ -f "$ZIM_HOME/init.zsh" ] && source "$ZIM_HOME/init.zsh"
           [ -f "$ZIM_HOME/zimfw.zsh" ] && zimfw() { source "$ZIM_HOME/zimfw.zsh" "$@"; }
-      when: install_zsh_theme | bool
+      when:
+        - install_zsh_theme | bool
+        - not (config_mode == 'symlink' and install_profiles | bool)
 
     - name: Add Powerlevel10k auto-config to zshrc
       ansible.builtin.blockinfile:
@@ -514,4 +659,6 @@
           if [ ! -f "$HOME/.p10k.zsh" ] && command -v p10k >/dev/null 2>&1; then
             (sleep 1; p10k configure) &
           fi
-      when: install_zsh_theme | bool
+      when:
+        - install_zsh_theme | bool
+        - not (config_mode == 'symlink' and install_profiles | bool)

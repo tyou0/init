@@ -13,11 +13,7 @@ export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:$PATH"
 # Fix for cmux/Ghostty SSH connections - fall back to xterm-256color
 [[ $TERM == "xterm-ghostty" ]] && export TERM=xterm-256color
 
-alias born='f(){ command -v bun >/dev/null 2>&1 && bun "$@" || node "$@"; }; f'
 alias fd='fdfind'
-alias gitclean='git branch --merged origin/main | grep -vE "^\s*(\*|main|develop)" | xargs -n 1 git branch -d'
-alias ccyolo='claude --permission-mode bypassPermissions'
-alias cch='claude -p --permission-mode bypassPermissions'
 
 # BEGIN init aliases
 [ -f "$HOME/.aliases" ] && . "$HOME/.aliases"

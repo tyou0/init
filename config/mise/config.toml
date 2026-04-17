@@ -10,6 +10,8 @@ python = "3.13"
 rust = "latest"
 uv = "latest"
 yt-dlp = "latest"
+ruby = "latest"
+java = "temurin-25"
 
 [settings]
 

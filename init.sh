@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MISE_BIN="${MISE_BIN:-}"
+MISE_INSTALL_VERSION="${MISE_INSTALL_VERSION:-v2026.4.14}"
 PYTHON_MISE_VERSION="${PYTHON_MISE_VERSION:-lts}"
 PYTHON_PRECOMPILED_FLAVOR="${PYTHON_PRECOMPILED_FLAVOR:-install_only}"
 PYTHON_LTS_VERSION="${PYTHON_LTS_VERSION:-3.13}"
@@ -49,7 +50,23 @@ fetch_url() {
     fi
 }
 
+download_url() {
+    local url="$1"
+    local destination="$2"
+
+    if has curl; then
+        curl -fsSL "$url" -o "$destination"
+    elif has wget; then
+        wget -qO "$destination" "$url"
+    else
+        printf 'Neither curl nor wget is available.\n' >&2
+        return 1
+    fi
+}
+
 ensure_mise() {
+    local installer_path
+
     if [ -n "$MISE_BIN" ] && [ -x "$MISE_BIN" ]; then
         return
     fi
@@ -60,7 +77,11 @@ ensure_mise() {
     fi
 
     mkdir -p "$HOME/.local/bin"
-    fetch_url https://mise.run | MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh
+    installer_path="$(mktemp)"
+    trap 'rm -f "$installer_path"' RETURN
+    download_url "https://mise.jdx.dev/install.sh" "$installer_path"
+    chmod +x "$installer_path"
+    MISE_VERSION="$MISE_INSTALL_VERSION" MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh "$installer_path"
     MISE_BIN="$HOME/.local/bin/mise"
 }
 
@@ -151,12 +172,14 @@ ensure_ansible "${ANSIBLE_ARGS[@]}"
 
 if [ "$AUTO_YES" -eq 1 ]; then
     ANSIBLE_ARGS+=(
-        -e config_mode=symlink
+        -e config_mode=copy
         -e install_packages=yes
         -e install_optional_packages=yes
         -e install_mise_direnv=yes
         -e trust_mise_config=yes
-        -e install_helper_scripts=yes
+        -e install_wifi_helper=no
+        -e install_proxmox_helper=no
+        -e install_newt_service_helper=no
         -e install_aliases=yes
         -e install_profiles=yes
         -e install_tmux=yes
