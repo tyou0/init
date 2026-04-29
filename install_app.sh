@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLAYBOOK_FILE="${ROOT_DIR}/apps-playbook.yml"
 MISE_BIN="${MISE_BIN:-}"
 UNAME_S="$(uname -s)"
 ANSIBLE_ARGS=()
@@ -26,17 +27,7 @@ parse_args() {
             -y|--yes)
                 ANSIBLE_EXTRA_VARS+=(
                     "confirm_install=yes"
-                    "config_mode=symlink"
-                    "install_packages=yes"
-                    "install_optional_packages=yes"
-                    "install_workspace_dirs=yes"
-                    "install_mise_direnv=yes"
-                    "trust_mise_config=yes"
-                    "install_helper_scripts=yes"
-                    "install_aliases=yes"
-                    "install_profiles=yes"
-                    "install_tmux=yes"
-                    "install_zsh_theme=yes"
+                    "install_secondary_apps=yes"
                 )
                 ;;
             *)
@@ -110,12 +101,6 @@ ensure_mise() {
     MISE_BIN="$HOME/.local/bin/mise"
 }
 
-activate_mise() {
-    set +u
-    eval "$("$MISE_BIN" activate bash)"
-    set -u
-}
-
 run_uv() {
     if has uv; then
         uv "$@"
@@ -124,24 +109,10 @@ run_uv() {
     fi
 }
 
-trust_global_mise_config() {
-    local config_file="${XDG_CONFIG_HOME:-$HOME/.config}/mise/config.toml"
-
-    if [ -f "$config_file" ]; then
-        "$MISE_BIN" trust -y "$config_file" >/dev/null 2>&1 || true
-    fi
-}
-
 ensure_uv() {
     if ! has uv; then
         "$MISE_BIN" use -g --yes uv@latest
         "$MISE_BIN" reshim uv >/dev/null 2>&1 || true
-    fi
-}
-
-ensure_pipx() {
-    if ! run_uv tool list | awk '{print $1}' | grep -qx 'pipx'; then
-        run_uv tool install pipx
     fi
 }
 
@@ -161,7 +132,7 @@ ensure_ansible() {
 
 run_ansible_playbook() {
     local ansible_playbook_bin="${ANSIBLE_PLAYBOOK_BIN:-ansible-playbook}"
-    local cmd=("$ansible_playbook_bin" -i "${ROOT_DIR}/inventory.ini" "${ROOT_DIR}/playbook.yml")
+    local cmd=("$ansible_playbook_bin" -i "${ROOT_DIR}/inventory.ini" "$PLAYBOOK_FILE")
     local extra_var arg
 
     if [ "${#ANSIBLE_EXTRA_VARS[@]}" -gt 0 ]; then
@@ -182,9 +153,7 @@ run_ansible_playbook() {
 parse_args "$@"
 ensure_fetcher
 ensure_mise
-trust_global_mise_config
 ensure_uv
-ensure_pipx
 ensure_ansible
 
 run_ansible_playbook

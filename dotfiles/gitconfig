@@ -13,3 +13,6 @@
 
 [credential "https://gitea.mistercorea.com"]
 	username = mistercorea
+[credential]
+	helper = osxkeychain
+	helper = "!f() { op=\"$1\"; if [ -z \"$op\" ]; then op=\"$0\"; fi; '/usr/local/bin/gmt' auth git-credential \"$op\"; }; f"

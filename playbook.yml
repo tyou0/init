@@ -9,11 +9,15 @@
       default: "symlink"
       private: false
     - name: install_packages
-      prompt: "Install base packages: bash, ca-certificates, curl, wget, git, jq, tmux, zsh?"
+      prompt: "Install base packages: bash, ca-certificates, curl, wget, git, jq, ripgrep, tmux, zsh?"
       default: "yes"
       private: false
     - name: install_optional_packages
-      prompt: "Install optional OS packages used by aliases: aria2?"
+      prompt: "Install optional OS packages used in daily CLI work: aria2, htop, btop, ctop, watch, fd/fdfind?"
+      default: "yes"
+      private: false
+    - name: install_workspace_dirs
+      prompt: "Create common workspace directories such as ~/src?"
       default: "yes"
       private: false
     - name: install_mise_direnv
@@ -53,6 +57,9 @@
     tmux_plugin_dir: "{{ ansible_facts.env.HOME }}/.tmux/plugins"
     tpack_dir: "{{ tmux_plugin_dir }}/tpm"
     mise_config_file: "{{ ansible_facts.env.XDG_CONFIG_HOME | default(ansible_facts.env.HOME + '/.config') }}/mise/config.toml"
+    # Keep the base package set small and cross-platform. These should exist on
+    # nearly every machine this repo bootstraps and are used throughout daily
+    # shell work.
     base_packages:
       - bash
       - ca-certificates
@@ -60,10 +67,26 @@
       - wget
       - git
       - jq
+      - ripgrep
       - tmux
       - zsh
+    # Optional packages stay best-effort because names and availability vary
+    # between package managers. The extra per-OS list keeps the common prompt
+    # simple while still handling fd's different package names.
     optional_packages:
       - aria2
+      - htop
+      - btop
+      - ctop
+      - watch
+    optional_linux_packages:
+      - fd-find
+    optional_macos_packages:
+      - fd
+    # Most work on this machine lives under ~/src, so create it early to avoid
+    # repeating the same manual mkdir step on fresh machines.
+    workspace_dirs:
+      - "{{ home_dir }}/src"
     tmux_plugins:
       - tmux-sensible
       - tmux-resurrect
@@ -71,10 +94,16 @@
     helper_scripts:
       - src: wifi.sh
         dest: wifi
+        systems:
+          - Darwin
       - src: updateProxmoxGuestIp.sh
         dest: updateProxmoxGuestIp
+        systems:
+          - Linux
       - src: newt_service.sh
         dest: newt_service
+        systems:
+          - Linux
     home_dotfiles:
       - src: dotfiles/zshrc
         dest: .zshrc
@@ -105,6 +134,7 @@
           - "File mode: {{ config_mode }}"
           - "Packages: {{ install_packages }}"
           - "Optional packages: {{ install_optional_packages }}"
+          - "Workspace directories: {{ install_workspace_dirs }} -> {{ workspace_dirs }}"
           - "Mise + direnv: {{ install_mise_direnv }}"
           - "Trust mise config: {{ trust_mise_config }}"
           - "Helper scripts: {{ install_helper_scripts }} -> {{ bin_dir }}"
@@ -131,22 +161,49 @@
       become: true
       when:
         - install_packages | bool
-        - ansible_facts.system != 'Darwin'
+        - ansible_facts.system == 'Linux'
 
     - name: Install optional packages on Linux
       ansible.builtin.package:
         name: "{{ item }}"
         state: present
       become: true
-      loop: "{{ optional_packages }}"
+      loop: "{{ optional_packages + optional_linux_packages }}"
       failed_when: false
       when:
         - install_packages | bool
         - install_optional_packages | bool
-        - ansible_facts.system != 'Darwin'
+        - ansible_facts.system == 'Linux'
+
+    - name: Find zsh on Linux
+      ansible.builtin.command: sh -lc 'command -v zsh'
+      changed_when: false
+      register: linux_zsh_path
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Linux'
+
+    - name: Set zsh as default shell on Linux
+      ansible.builtin.user:
+        name: "{{ ansible_user_id }}"
+        shell: "{{ linux_zsh_path.stdout }}"
+      become: true
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Linux'
+        - linux_zsh_path.stdout | length > 0
 
     - name: Check for Homebrew on macOS
-      ansible.builtin.command: sh -lc 'command -v brew'
+      ansible.builtin.shell: |
+        if command -v brew >/dev/null 2>&1; then
+          command -v brew
+        elif [ -x /opt/homebrew/bin/brew ]; then
+          printf '%s\n' /opt/homebrew/bin/brew
+        elif [ -x /usr/local/bin/brew ]; then
+          printf '%s\n' /usr/local/bin/brew
+        fi
+      args:
+        executable: /bin/sh
       changed_when: false
       failed_when: false
       register: brew_check
@@ -154,29 +211,49 @@
         - install_packages | bool
         - ansible_facts.system == 'Darwin'
 
+    - name: Stop if Homebrew is missing on macOS
+      ansible.builtin.fail:
+        msg: "Homebrew is required to install macOS packages. Install it from https://brew.sh/ or rerun with install_packages=no."
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.stdout | trim == ''
+
+    - name: Set Homebrew binary path
+      ansible.builtin.set_fact:
+        brew_bin: "{{ brew_check.stdout | trim }}"
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.stdout | trim != ''
+
     - name: Install base packages on macOS
       ansible.builtin.shell: |
-        if brew list --formula "{{ item }}" >/dev/null 2>&1; then
+        if "{{ brew_bin }}" list --formula "{{ item }}" >/dev/null 2>&1; then
           exit 0
         fi
-        brew install "{{ item }}"
+        "{{ brew_bin }}" install "{{ item }}"
         echo "__changed__"
+      args:
+        executable: /bin/sh
       loop: "{{ base_packages }}"
       register: brew_base_install
       changed_when: "'__changed__' in brew_base_install.stdout"
       when:
         - install_packages | bool
         - ansible_facts.system == 'Darwin'
-        - brew_check.rc == 0
+        - brew_bin is defined
 
     - name: Install optional packages on macOS
       ansible.builtin.shell: |
-        if brew list --formula "{{ item }}" >/dev/null 2>&1; then
+        if "{{ brew_bin }}" list --formula "{{ item }}" >/dev/null 2>&1; then
           exit 0
         fi
-        brew install "{{ item }}"
+        "{{ brew_bin }}" install "{{ item }}"
         echo "__changed__"
-      loop: "{{ optional_packages }}"
+      args:
+        executable: /bin/sh
+      loop: "{{ optional_packages + optional_macos_packages }}"
       register: brew_optional_install
       changed_when: "'__changed__' in brew_optional_install.stdout"
       failed_when: false
@@ -184,7 +261,7 @@
         - install_packages | bool
         - install_optional_packages | bool
         - ansible_facts.system == 'Darwin'
-        - brew_check.rc == 0
+        - brew_bin is defined
 
     - name: Create local bin directory
       ansible.builtin.file:
@@ -192,6 +269,14 @@
         state: directory
         mode: "0755"
       when: install_helper_scripts | bool or install_mise_direnv | bool
+
+    - name: Create workspace directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: "{{ workspace_dirs }}"
+      when: install_workspace_dirs | bool
 
     - name: Install helper scripts by symlink
       ansible.builtin.file:
@@ -203,6 +288,7 @@
       when:
         - install_helper_scripts | bool
         - config_mode == 'symlink'
+        - ansible_facts.system in item.systems
 
     - name: Install helper scripts by copy
       ansible.builtin.copy:
@@ -213,6 +299,7 @@
       when:
         - install_helper_scripts | bool
         - config_mode == 'copy'
+        - ansible_facts.system in item.systems
 
     - name: Install aliases by symlink
       ansible.builtin.file:
@@ -289,7 +376,7 @@
         create: true
         marker: "# {mark} init aliases"
         block: |
-          [ -f "{{ aliases_file }}" ] && . "{{ aliases_file }}"
+          [ -f "$HOME/.aliases" ] && . "$HOME/.aliases"
       loop:
         - "{{ home_dir }}/.zshrc"
         - "{{ home_dir }}/.bashrc"
@@ -403,6 +490,27 @@
         - trust_mise_config | bool
         - mise_config_stat.stat.exists
 
+    - name: Check missing global mise tools
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - install
+          - --dry-run-code
+      changed_when: false
+      failed_when: mise_install_check.rc not in [0, 1]
+      register: mise_install_check
+      when: install_mise_direnv | bool
+
+    - name: Install global mise tools
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - install
+          - --yes
+      when:
+        - install_mise_direnv | bool
+        - mise_install_check.rc == 1
+
     - name: Check global direnv mise entry
       ansible.builtin.command:
         argv:
@@ -437,7 +545,7 @@
         create: true
         marker: "# {mark} init mise and direnv"
         block: |
-          command -v mise >/dev/null 2>&1 && eval "$(mise activate {{ item.shell }})"
+          command -v mise >/dev/null 2>&1 && eval "$(mise activate {{ item.shell }} --quiet)"
           command -v direnv >/dev/null 2>&1 && eval "$(direnv hook {{ item.shell }})"
       loop:
         - path: "{{ home_dir }}/.zshrc"
@@ -455,11 +563,12 @@
     - name: Install Zim if missing
       ansible.builtin.shell: |
         set -euo pipefail
+        mkdir -p "{{ home_dir }}/.zim"
         if command -v curl >/dev/null 2>&1; then
-          curl -fsSL https://raw.githubusercontent.com/zimfw/install/master/install.zsh
+          curl -fsSL --create-dirs -o "{{ home_dir }}/.zim/zimfw.zsh" https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh
         else
-          wget -qO- https://raw.githubusercontent.com/zimfw/install/master/install.zsh
-        fi | zsh
+          wget -qO "{{ home_dir }}/.zim/zimfw.zsh" https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh
+        fi
       args:
         executable: /bin/bash
         creates: "{{ home_dir }}/.zim/zimfw.zsh"
@@ -479,8 +588,8 @@
     - name: Enable Powerlevel10k Zim module
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.zimrc"
-        regexp: '^zmodule powerlevel10k$'
-        line: zmodule powerlevel10k
+        regexp: '^zmodule .*powerlevel10k.*$'
+        line: zmodule romkatv/powerlevel10k
         create: true
         mode: "0644"
       when: install_zsh_theme | bool
@@ -493,6 +602,15 @@
         update: true
       when: install_zsh_theme | bool
 
+    - name: Build Zim init files
+      ansible.builtin.command:
+        argv:
+          - zsh
+          - -lc
+          - "export ZIM_HOME={{ home_dir }}/.zim; source {{ home_dir }}/.zim/zimfw.zsh install -q && source {{ home_dir }}/.zim/zimfw.zsh build -q"
+      changed_when: false
+      when: install_zsh_theme | bool
+
     - name: Add Zim initialization to zshrc
       ansible.builtin.blockinfile:
         path: "{{ home_dir }}/.zshrc"
@@ -500,7 +618,7 @@
         marker: "# {mark} init zim"
         block: |
           export ZIM_HOME="${ZDOTDIR:-$HOME}/.zim"
-          [ -f "$ZIM_HOME/zimfw.zsh" ] && source "$ZIM_HOME/zimfw.zsh" init -q
+          [ -f "$ZIM_HOME/init.zsh" ] && source "$ZIM_HOME/init.zsh"
       when: install_zsh_theme | bool
 
     - name: Add Powerlevel10k auto-config to zshrc

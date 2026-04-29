@@ -8,10 +8,21 @@ fi
 # If you come from bash you might have to change your $PATH.
 # export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$PATH
 export BUN_INSTALL="$HOME/.bun"
-export PATH="/home/tyou/.local/bin:$BUN_INSTALL/bin:$PATH"
+case "$(uname -s)" in
+  Darwin)
+    export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$BUN_INSTALL/bin:$PATH"
+    ;;
+  *)
+    export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:$PATH"
+    ;;
+esac
 
 # Fix for cmux/Ghostty SSH connections - fall back to xterm-256color
 [[ $TERM == "xterm-ghostty" ]] && export TERM=xterm-256color
+
+# Use Bitwarden desktop as the SSH agent so git/ssh auth follows the same
+# desktop login state across terminals.
+export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"
 
 # Path to your Oh My Zsh installation.
 export ZSH="$HOME/.oh-my-zsh"
@@ -84,7 +95,9 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 # Add wisely, as too many plugins slow down shell startup.
 plugins=(git)
 
-source $ZSH/oh-my-zsh.sh
+if [ -r "$ZSH/oh-my-zsh.sh" ]; then
+  source "$ZSH/oh-my-zsh.sh"
+fi
 
 # User configuration
 
@@ -115,22 +128,29 @@ source $ZSH/oh-my-zsh.sh
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 alias born='f(){ command -v bun >/dev/null 2>&1 && bun "$@" || node "$@"; }; f'
-alias fd='fdfind'
+if command -v fdfind >/dev/null 2>&1; then
+  alias fd='fdfind'
+fi
 alias gitclean='git branch --merged origin/main | grep -vE "^\s*(\*|main|develop)" | xargs -n 1 git branch -d'
 alias ccyolo='claude --permission-mode bypassPermissions'
 alias cch='claude -p --permission-mode bypassPermissions'
-
-# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
 # BEGIN init aliases
 [ -f "$HOME/.aliases" ] && . "$HOME/.aliases"
 # END init aliases
 
 # BEGIN init mise and direnv
-command -v mise >/dev/null 2>&1 && eval "$(mise activate zsh)"
+command -v mise >/dev/null 2>&1 && eval "$(mise activate zsh --quiet)"
 command -v direnv >/dev/null 2>&1 && eval "$(direnv hook zsh)"
 # END init mise and direnv
+
+# BEGIN init zim
+export ZIM_HOME="${ZDOTDIR:-$HOME}/.zim"
+[ -f "$ZIM_HOME/init.zsh" ] && source "$ZIM_HOME/init.zsh"
+# END init zim
+
+# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
+[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
 # pnpm
 export PNPM_HOME="$HOME/.local/share/pnpm"
@@ -138,5 +158,16 @@ case ":$PATH:" in
   *":$PNPM_HOME:"*) ;;
   *) export PATH="$PNPM_HOME:$PATH" ;;
 esac
+# Most JS repos here use pnpm or bun. Keeping `npm` mapped to pnpm avoids
+# accidentally creating a second lockfile or mixed install state.
+alias npm='pnpm'
 # pnpm end
 command -v tv >/dev/null 2>&1 && eval "$(tv init zsh)"
+# BEGIN init p10k configure
+if [ ! -f "$HOME/.p10k.zsh" ] && command -v p10k >/dev/null 2>&1; then
+  (sleep 1; p10k configure) &
+fi
+# END init p10k configure
+
+
+export PATH="/Users/tyou/.bun/bin:$PATH"

@@ -8,6 +8,9 @@ case $- in
       *) return;;
 esac
 
+# Use Bitwarden desktop as the SSH agent.
+export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"
+
 # don't put duplicate lines or lines starting with space in the history.
 # See bash(1) for more options
 HISTCONTROL=ignoreboth
@@ -121,6 +124,6 @@ fi
 # END init aliases
 
 # BEGIN init mise and direnv
-command -v mise >/dev/null 2>&1 && eval "$(mise activate bash)"
+command -v mise >/dev/null 2>&1 && eval "$(mise activate bash --quiet)"
 command -v direnv >/dev/null 2>&1 && eval "$(direnv hook bash)"
 # END init mise and direnv
