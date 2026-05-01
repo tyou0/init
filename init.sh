@@ -3,9 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MISE_BIN="${MISE_BIN:-}"
+MISE_INSTALL_VERSION="${MISE_INSTALL_VERSION:-v2026.4.14}"
+PYTHON_MISE_VERSION="${PYTHON_MISE_VERSION:-lts}"
+PYTHON_PRECOMPILED_FLAVOR="${PYTHON_PRECOMPILED_FLAVOR:-install_only}"
+PYTHON_LTS_VERSION="${PYTHON_LTS_VERSION:-3.13}"
+AUTO_YES=0
 UNAME_S="$(uname -s)"
-ANSIBLE_ARGS=()
-ANSIBLE_EXTRA_VARS=()
+declare -a ANSIBLE_ARGS=()
 
 case "$UNAME_S" in
     Darwin)
@@ -24,20 +28,7 @@ parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             -y|--yes)
-                ANSIBLE_EXTRA_VARS+=(
-                    "confirm_install=yes"
-                    "config_mode=symlink"
-                    "install_packages=yes"
-                    "install_optional_packages=yes"
-                    "install_workspace_dirs=yes"
-                    "install_mise_direnv=yes"
-                    "trust_mise_config=yes"
-                    "install_helper_scripts=yes"
-                    "install_aliases=yes"
-                    "install_profiles=yes"
-                    "install_tmux=yes"
-                    "install_zsh_theme=yes"
-                )
+                AUTO_YES=1
                 ;;
             *)
                 ANSIBLE_ARGS+=("$1")
@@ -90,12 +81,28 @@ fetch_url() {
     elif has wget; then
         wget -qO- "$url"
     else
+        printf 'Neither curl nor banner is available.\n' >&2
+        return 1
+    fi
+}
+
+download_url() {
+    local url="$1"
+    local destination="$2"
+
+    if has curl; then
+        curl -fsSL "$url" -o "$destination"
+    elif has wget; then
+        wget -qO "$destination" "$url"
+    else
         printf 'Neither curl nor wget is available.\n' >&2
         return 1
     fi
 }
 
 ensure_mise() {
+    local installer_path
+
     if [ -n "$MISE_BIN" ] && [ -x "$MISE_BIN" ]; then
         return
     fi
@@ -106,7 +113,11 @@ ensure_mise() {
     fi
 
     mkdir -p "$HOME/.local/bin"
-    fetch_url https://mise.run | MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh
+    installer_path="$(mktemp)"
+    trap 'rm -f "$installer_path"' RETURN
+    download_url "https://mise.jdx.dev/install.sh" "$installer_path"
+    chmod +x "$installer_path"
+    MISE_VERSION="$MISE_INSTALL_VERSION" MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh "$installer_path"
     MISE_BIN="$HOME/.local/bin/mise"
 }
 
@@ -114,14 +125,7 @@ activate_mise() {
     set +u
     eval "$("$MISE_BIN" activate bash)"
     set -u
-}
-
-run_uv() {
-    if has uv; then
-        uv "$@"
-    else
-        "$MISE_BIN" exec uv@latest -- uv "$@"
-    fi
+    hash -r
 }
 
 trust_global_mise_config() {
@@ -132,10 +136,52 @@ trust_global_mise_config() {
     fi
 }
 
-ensure_uv() {
+ensure_mise_python_settings() {
+    local compile_value
+    local flavor_value
+
+    compile_value="$("$MISE_BIN" settings get python.compile 2>/dev/null || true)"
+    if [ "$compile_value" != "false" ]; then
+        "$MISE_BIN" settings set python.compile false
+    fi
+
+    flavor_value="$("$MISE_BIN" settings get python.precompiled_flavor 2>/dev/null || true)"
+    if [ "$flavor_value" != "$PYTHON_PRECOMPILED_FLAVOR" ]; then
+        "$MISE_BIN" settings set python.precompiled_flavor "$PYTHON_PRECOMPILED_FLAVOR"
+    fi
+}
+
+resolve_python_mise_version() {
+    if [ "$PYTHON_MISE_VERSION" = "lts" ]; then
+        printf '%s\n' "$PYTHON_LTS_VERSION"
+    else
+        printf '%s\n' "$PYTHON_MISE_VERSION"
+    fi
+}
+
+ensure_python() {
+    local resolved_python_version
+
+    ensure_mise_python_settings
+    resolved_python_version="$(resolve_python_mise_version)"
+
+    if ! "$MISE_BIN" which python3 >/dev/null 2>&1; then
+        "$MISE_BIN" use -g --yes "python@${resolved_python_version}"
+    fi
+
+    activate_mise
+
     if ! has uv; then
         "$MISE_BIN" use -g --yes uv@latest
         "$MISE_BIN" reshim uv >/dev/null 2>&1 || true
+    fi
+}
+
+run_uv() {
+    if has uv; then
+        uv "$@"
+    else
+        "$MISE_BIN" exec uv@latest -- uv "$@"
     fi
 }
 
@@ -150,41 +196,44 @@ ensure_ansible() {
         return
     fi
 
-    if ! run_uv tool list | awk '{print $1}' | grep -qx 'ansible-core'; then
-        run_uv tool install ansible-core
-    fi
+    export PATH="$HOME/.local/bin:$PATH"
+    export PIPX_DEFAULT_PYTHON="$("$MISE_BIN" which python3)"
+    pipx install --python "$PIPX_DEFAULT_PYTHON" --include-deps ansible
 
     if ! has ansible-playbook; then
-        ANSIBLE_PLAYBOOK_BIN="$(run_uv tool dir --bin)/ansible-playbook"
+        printf 'Failed to install ansible-playbook with pipx.\n' >&2
+        exit 1
     fi
-}
-
-run_ansible_playbook() {
-    local ansible_playbook_bin="${ANSIBLE_PLAYBOOK_BIN:-ansible-playbook}"
-    local cmd=("$ansible_playbook_bin" -i "${ROOT_DIR}/inventory.ini" "${ROOT_DIR}/playbook.yml")
-    local extra_var arg
-
-    if [ "${#ANSIBLE_EXTRA_VARS[@]}" -gt 0 ]; then
-        for extra_var in "${ANSIBLE_EXTRA_VARS[@]}"; do
-            cmd+=(--extra-vars="$extra_var")
-        done
-    fi
-
-    if [ "${#ANSIBLE_ARGS[@]}" -gt 0 ]; then
-        for arg in "${ANSIBLE_ARGS[@]}"; do
-            cmd+=("$arg")
-        done
-    fi
-
-    exec "${cmd[@]}"
 }
 
 parse_args "$@"
+
 ensure_fetcher
 ensure_mise
 trust_global_mise_config
-ensure_uv
+activate_mise
+ensure_python
 ensure_pipx
 ensure_ansible
 
-run_ansible_playbook
+if [ "$AUTO_YES" -eq 1 ]; then
+    ANSIBLE_ARGS+=(
+        -e config_mode=copy
+        -e install_packages=yes
+        -e install_optional_packages=yes
+        -e install_workspace_dirs=yes
+        -e install_mise_direnv=yes
+        -e trust_mise_config=yes
+        -e install_wifi_helper=no
+        -e install_proxmox_helper=no
+        -e install_newt_service_helper=no
+        -e install_fetchall_helper=yes
+        -e install_aliases=yes
+        -e install_profiles=yes
+        -e install_tmux=yes
+        -e install_zsh_theme=yes
+        -e confirm_install=yes
+    )
+fi
+
+exec ansible-playbook -i "${ROOT_DIR}/inventory.ini" "${ROOT_DIR}/playbook.yml" "${ANSIBLE_ARGS[@]}"

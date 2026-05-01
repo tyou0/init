@@ -5,6 +5,7 @@ ZDOT="${ZDOTDIR:-$HOME}"
 ZIM_HOME="$ZDOT/.zim"
 ZSHRC="$ZDOT/.zshrc"
 ZIMRC="$ZDOT/.zimrc"
+ZIMFW_VERSION="${ZIMFW_VERSION:-v1.20.0}"
 
 ### ------------------------------------------------------------
 ### Cross‑platform safe "delete matching lines" function
@@ -29,7 +30,12 @@ fi
 
 echo "=== Installing Zim if missing ==="
 if [ ! -d "$ZIM_HOME" ]; then
-    curl -fsSL https://raw.githubusercontent.com/zimfw/install/master/install.zsh | zsh
+    mkdir -p "$ZIM_HOME"
+fi
+
+if [ ! -f "$ZIM_HOME/zimfw.zsh" ]; then
+    curl -fsSL "https://github.com/zimfw/zimfw/releases/download/${ZIMFW_VERSION}/zimfw.zsh" -o "$ZIM_HOME/zimfw.zsh"
+    chmod 755 "$ZIM_HOME/zimfw.zsh"
 fi
 
 echo "=== Fixing .zimrc ==="
@@ -52,19 +58,20 @@ delete_lines "ZSH_THEME" "$ZSHRC"
 delete_lines "plugins=" "$ZSHRC"
 
 # Ensure Zim init block exists
-if ! grep -q "zimfw.zsh" "$ZSHRC"; then
+if ! grep -q "ZIM_HOME" "$ZSHRC"; then
 cat >> "$ZSHRC" <<EOF
 
 # >>> Zim Initialization >>>
 export ZIM_HOME="\${ZDOTDIR:-\$HOME}/.zim"
-source "\$ZIM_HOME/zimfw.zsh" init -q
+[ -f "\$ZIM_HOME/init.zsh" ] && source "\$ZIM_HOME/init.zsh"
+[ -f "\$ZIM_HOME/zimfw.zsh" ] && zimfw() { source "\$ZIM_HOME/zimfw.zsh" "\$@"; }
 # <<< Zim Initialization <<<
 EOF
 fi
 
 echo "=== Rebuilding Zim ==="
-zsh -c "export ZIM_HOME='$ZIM_HOME'; source '$ZIM_HOME/zimfw.zsh' init -q; zimfw install"
-zsh -c "export ZIM_HOME='$ZIM_HOME'; source '$ZIM_HOME/zimfw.zsh' init -q; zimfw update"
+zsh -c "export ZIM_HOME='$ZIM_HOME'; [ -f '$ZIM_HOME/init.zsh' ] && source '$ZIM_HOME/init.zsh'; zimfw() { source '$ZIM_HOME/zimfw.zsh' \"\$@\"; }; zimfw install"
+zsh -c "export ZIM_HOME='$ZIM_HOME'; [ -f '$ZIM_HOME/init.zsh' ] && source '$ZIM_HOME/init.zsh'; zimfw() { source '$ZIM_HOME/zimfw.zsh' \"\$@\"; }; zimfw update"
 
 echo "=== Adding Powerlevel10k auto-config ==="
 if ! grep -q "p10k configure" "$ZSHRC"; then

@@ -3,6 +3,7 @@
 # with the dotfiles repo instead of depending on host package managers.
 bat = "latest"
 bun = "latest"
+deno = "latest"
 dart = { version = "latest", url = "https://storage.googleapis.com/dart-archive/channels/stable/release/{{ version }}/sdk/dartsdk-{{ os() }}-{{ arch() }}-release.zip", version_list_url = "https://storage.googleapis.com/storage/v1/b/dart-archive/o?prefix=channels/stable/release/&delimiter=/", version_regex = 'channels/stable/release/(\d+\.\d+\.\d+)/' }
 direnv = "latest"
 # ffmpeg stays here even though Homebrew can provide it because yt-dlp and ad hoc
@@ -14,7 +15,15 @@ lazygit = "latest"
 neovim = "0.12.1"
 node = "lts"
 pnpm = "latest"
-python = "latest"
+python = "3.13"
 rust = "latest"
 uv = "latest"
 yt-dlp = "latest"
+ruby = "latest"
+java = "temurin-25"
+
+[settings]
+
+[settings.python]
+compile = false
+precompiled_flavor = "install_only"

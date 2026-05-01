@@ -6,6 +6,13 @@ alias proxyoff='unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY AL
 
 alias ccyolo='claude --permission-mode bypassPermissions'
 alias cch='claude -p --permission-mode bypassPermissions'
+alias fetchall='fetchall'
 
 
-alias yt='yt-dlp --write-subs --write-auto-subs --sub-lang en,kr --embed-subs --sub-format srt/best --external-downloader=aria2c --external-downloader-args "--enable-http-pipelining=true --min-split-size=1M --max-connection-per-server=16 --max-concurrent-downloads=16 --split=16"'
+yt() {
+  if command -v aria2c >/dev/null 2>&1; then
+    yt-dlp --write-subs --write-auto-subs --sub-lang en,kr --embed-subs --sub-format srt/best --external-downloader=aria2c --external-downloader-args "--enable-http-pipelining=true --min-split-size=1M --max-connection-per-server=16 --max-concurrent-downloads=16 --split=16" "$@"
+  else
+    yt-dlp --write-subs --write-auto-subs --sub-lang en,kr --embed-subs --sub-format srt/best "$@"
+  fi
+}
