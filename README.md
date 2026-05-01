@@ -14,6 +14,11 @@ To accept the default answers and run non-interactively:
 ./init.sh -y
 ```
 
+On Linux, package installation and default-shell changes need sudo. In a
+terminal, the playbook asks for the sudo password when cached sudo credentials
+are unavailable; in a noninteractive shell, run `sudo -v` first, run as root, or
+pass `-e install_packages=no` to skip package and shell changes.
+
 `init.sh` bootstraps Ansible if it is missing, then runs:
 
 ```sh
