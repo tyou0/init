@@ -1,0 +1,252 @@
+---
+- name: Install secondary workstation apps
+  hosts: local
+  gather_facts: true
+
+  vars_prompt:
+    - name: install_secondary_apps
+      prompt: "Install secondary apps: v2rayA, yabai, Tailscale, Docker Desktop, DisplayLink, Vivaldi, Bitwarden, Signal, Zed, VS Code, Antigravity, IINA, DBeaver, iTerm2, cmux, Alfred, Stats, Thaw, Dropbox, Codex, JetBrains Mono?"
+      default: "yes"
+      private: false
+
+  vars:
+    repo_root: "{{ playbook_dir }}"
+    bin_dir: "{{ ansible_facts.env.HOME }}/.local/bin"
+    # Tap-backed packages stay separate so the normal formula/cask list remains
+    # readable at a glance.
+    secondary_macos_taps:
+      - v2rayA/v2raya
+      - asmvik/formulae
+    secondary_macos_formulae:
+      - v2raya
+      - asmvik/formulae/yabai
+      - tailscale
+    secondary_macos_services:
+      - v2raya
+    # Keep GUI apps here, even if they expose CLI shims later. That matches how
+    # Homebrew manages Docker Desktop, Codex, and similar workstation apps.
+    secondary_macos_casks:
+      - vivaldi
+      - bitwarden
+      - signal
+      - zed
+      - visual-studio-code
+      - antigravity
+      - codex
+      - docker-desktop
+      - displaylink
+      - iina
+      - dbeaver-community
+      - iterm2
+      - cmux
+      - alfred
+      - stats
+      - thaw
+      - dropbox
+      - tailscale-app
+      - font-jetbrains-mono
+    secondary_linux_packages:
+      - v2raya
+      - vivaldi-stable
+      - bitwarden
+      - signal-desktop
+    secondary_linux_flatpaks:
+      - com.vivaldi.Vivaldi
+      - com.bitwarden.desktop
+      - org.signal.Signal
+      - io.dbeaver.DBeaverCommunity
+    secondary_helper_scripts:
+      - src: bitwarden-proxy.sh
+        dest: bitwarden-proxy
+
+  pre_tasks:
+    - name: Show app install summary
+      ansible.builtin.debug:
+        msg:
+          - "Secondary apps: {{ install_secondary_apps }}"
+          - "macOS taps: {{ secondary_macos_taps }}"
+          - "macOS formulae: {{ secondary_macos_formulae }}"
+          - "macOS casks: {{ secondary_macos_casks }}"
+          - "macOS services: {{ secondary_macos_services }}"
+          - "Linux packages: {{ secondary_linux_packages }}"
+          - "Linux Flatpaks: {{ secondary_linux_flatpaks }}"
+          - "Secondary helper scripts: {{ secondary_helper_scripts }} -> {{ bin_dir }}"
+
+    - name: Confirm app installation
+      ansible.builtin.pause:
+        prompt: "Start secondary app installation with these answers? Type yes to continue"
+      register: app_install_confirmation
+      when: confirm_install is not defined
+
+    - name: Stop before installing apps
+      ansible.builtin.meta: end_play
+      when: (app_install_confirmation.user_input | default(confirm_install | default('no')) | lower) != 'yes'
+
+  tasks:
+    - name: Check for Homebrew on macOS
+      ansible.builtin.shell: |
+        if command -v brew >/dev/null 2>&1; then
+          command -v brew
+        elif [ -x /opt/homebrew/bin/brew ]; then
+          printf '%s\n' /opt/homebrew/bin/brew
+        elif [ -x /usr/local/bin/brew ]; then
+          printf '%s\n' /usr/local/bin/brew
+        fi
+      args:
+        executable: /bin/sh
+      changed_when: false
+      failed_when: false
+      register: brew_check
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Darwin'
+
+    - name: Stop if Homebrew is missing on macOS
+      ansible.builtin.fail:
+        msg: "Homebrew is required to install macOS secondary apps. Install it from https://brew.sh/ or rerun with install_secondary_apps=no."
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.stdout | trim == ''
+
+    - name: Set Homebrew binary path
+      ansible.builtin.set_fact:
+        brew_bin: "{{ brew_check.stdout | trim }}"
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.stdout | trim != ''
+
+    - name: Add secondary Homebrew taps on macOS
+      ansible.builtin.command:
+        argv:
+          - "{{ brew_bin }}"
+          - tap
+          - "{{ item }}"
+      loop: "{{ secondary_macos_taps }}"
+      register: brew_secondary_taps
+      changed_when: "'Tapped' in (brew_secondary_taps.stdout + brew_secondary_taps.stderr)"
+      failed_when: false
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_bin is defined
+
+    - name: Install secondary Homebrew formulae on macOS
+      ansible.builtin.shell: |
+        if "{{ brew_bin }}" list --formula "{{ item }}" >/dev/null 2>&1; then
+          exit 0
+        fi
+        "{{ brew_bin }}" install "{{ item }}"
+        echo "__changed__"
+      args:
+        executable: /bin/sh
+      loop: "{{ secondary_macos_formulae }}"
+      register: brew_secondary_formula_install
+      changed_when: "'__changed__' in brew_secondary_formula_install.stdout"
+      failed_when: false
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_bin is defined
+
+    - name: Install secondary Homebrew casks on macOS
+      ansible.builtin.shell: |
+        if "{{ brew_bin }}" list --cask "{{ item }}" >/dev/null 2>&1; then
+          exit 0
+        fi
+        "{{ brew_bin }}" install --cask "{{ item }}"
+        echo "__changed__"
+      args:
+        executable: /bin/sh
+      loop: "{{ secondary_macos_casks }}"
+      register: brew_secondary_cask_install
+      changed_when: "'__changed__' in brew_secondary_cask_install.stdout"
+      failed_when: false
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_bin is defined
+
+    - name: Start secondary Homebrew services on macOS
+      ansible.builtin.command:
+        argv:
+          - "{{ brew_bin }}"
+          - services
+          - start
+          - "{{ item }}"
+      loop: "{{ secondary_macos_services }}"
+      register: brew_secondary_service_start
+      changed_when: "'Successfully started' in (brew_secondary_service_start.stdout + brew_secondary_service_start.stderr)"
+      failed_when: false
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_bin is defined
+
+    - name: Install secondary packages on Linux
+      ansible.builtin.package:
+        name: "{{ item }}"
+        state: present
+      become: true
+      loop: "{{ secondary_linux_packages }}"
+      failed_when: false
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Linux'
+
+    - name: Check for Flatpak on Linux
+      ansible.builtin.command: sh -lc 'command -v flatpak'
+      changed_when: false
+      failed_when: false
+      register: flatpak_check
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Linux'
+
+    - name: Add Flathub remote on Linux
+      ansible.builtin.command:
+        argv:
+          - flatpak
+          - remote-add
+          - --if-not-exists
+          - flathub
+          - https://flathub.org/repo/flathub.flatpakrepo
+      failed_when: false
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Linux'
+        - flatpak_check.rc == 0
+
+    - name: Install secondary Flatpak apps on Linux
+      ansible.builtin.command:
+        argv:
+          - flatpak
+          - install
+          - -y
+          - --noninteractive
+          - flathub
+          - "{{ item }}"
+      loop: "{{ secondary_linux_flatpaks }}"
+      register: secondary_flatpak_install
+      changed_when: "'Installing' in (secondary_flatpak_install.stdout + secondary_flatpak_install.stderr)"
+      failed_when: false
+      when:
+        - install_secondary_apps | bool
+        - ansible_facts.system == 'Linux'
+        - flatpak_check.rc == 0
+
+    - name: Create local bin directory for secondary helper scripts
+      ansible.builtin.file:
+        path: "{{ bin_dir }}"
+        state: directory
+        mode: "0755"
+      when: install_secondary_apps | bool
+
+    - name: Install secondary helper scripts
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/{{ item.src }}"
+        dest: "{{ bin_dir }}/{{ item.dest }}"
+        mode: "0755"
+      loop: "{{ secondary_helper_scripts }}"
+      when: install_secondary_apps | bool

@@ -9,11 +9,15 @@
       default: "copy"
       private: false
     - name: install_packages
-      prompt: "Install base packages: bash, ca-certificates, curl, wget, git, jq, tmux, zsh, zlib1g-dev, build-essential, libssl-dev, libyaml-dev, libreadline-dev, libffi-dev, autoconf, bison?"
+      prompt: "Install base packages: bash, ca-certificates, curl, wget, git, jq, ripgrep, tmux, zsh, zlib1g-dev, build-essential, libssl-dev, libyaml-dev, libreadline-dev, libffi-dev, autoconf, bison?"
       default: "yes"
       private: false
     - name: install_optional_packages
-      prompt: "Install optional OS packages used by aliases: aria2?"
+      prompt: "Install optional OS packages used in daily CLI work: aria2, htop, btop, ctop, watch, fd/fdfind?"
+      default: "yes"
+      private: false
+    - name: install_workspace_dirs
+      prompt: "Create common workspace directories such as ~/src?"
       default: "yes"
       private: false
     - name: install_mise_direnv
@@ -74,6 +78,7 @@
       - wget
       - git
       - jq
+      - ripgrep
       - tmux
       - zsh
       - zlib1g-dev
@@ -86,6 +91,16 @@
       - bison
     optional_packages:
       - aria2
+      - htop
+      - btop
+      - ctop
+      - watch
+    optional_linux_packages:
+      - fd-find
+    optional_macos_packages:
+      - fd
+    workspace_dirs:
+      - "{{ home_dir }}/src"
     tmux_plugins:
       - tmux-sensible
       - tmux-resurrect
@@ -148,6 +163,7 @@
           - "File mode: {{ config_mode }}"
           - "Packages: {{ install_packages }}"
           - "Optional packages: {{ install_optional_packages }}"
+          - "Workspace directories: {{ install_workspace_dirs }} -> {{ workspace_dirs }}"
           - "Mise + direnv: {{ install_mise_direnv }}"
           - "Trust mise config: {{ trust_mise_config }}"
           - "Wifi helper: {{ install_wifi_helper }} -> {{ bin_dir }}"
@@ -177,22 +193,49 @@
       become: true
       when:
         - install_packages | bool
-        - ansible_facts.system != 'Darwin'
+        - ansible_facts.system == 'Linux'
 
     - name: Install optional packages on Linux
       ansible.builtin.package:
         name: "{{ item }}"
         state: present
       become: true
-      loop: "{{ optional_packages }}"
+      loop: "{{ optional_packages + optional_linux_packages }}"
       failed_when: false
       when:
         - install_packages | bool
         - install_optional_packages | bool
-        - ansible_facts.system != 'Darwin'
+        - ansible_facts.system == 'Linux'
+
+    - name: Find zsh on Linux
+      ansible.builtin.command: sh -lc 'command -v zsh'
+      changed_when: false
+      register: linux_zsh_path
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Linux'
+
+    - name: Set zsh as default shell on Linux
+      ansible.builtin.user:
+        name: "{{ ansible_user_id }}"
+        shell: "{{ linux_zsh_path.stdout }}"
+      become: true
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Linux'
+        - linux_zsh_path.stdout | length > 0
 
     - name: Check for Homebrew on macOS
-      ansible.builtin.command: sh -lc 'command -v brew'
+      ansible.builtin.shell: |
+        if command -v brew >/dev/null 2>&1; then
+          command -v brew
+        elif [ -x /opt/homebrew/bin/brew ]; then
+          printf '%s\n' /opt/homebrew/bin/brew
+        elif [ -x /usr/local/bin/brew ]; then
+          printf '%s\n' /usr/local/bin/brew
+        fi
+      args:
+        executable: /bin/sh
       changed_when: false
       failed_when: false
       register: brew_check
@@ -200,29 +243,49 @@
         - install_packages | bool
         - ansible_facts.system == 'Darwin'
 
+    - name: Stop if Homebrew is missing on macOS
+      ansible.builtin.fail:
+        msg: "Homebrew is required to install macOS packages. Install it from https://brew.sh/ or rerun with install_packages=no."
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.stdout | trim == ''
+
+    - name: Set Homebrew binary path
+      ansible.builtin.set_fact:
+        brew_bin: "{{ brew_check.stdout | trim }}"
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Darwin'
+        - brew_check.stdout | trim != ''
+
     - name: Install base packages on macOS
       ansible.builtin.shell: |
-        if brew list --formula "{{ item }}" >/dev/null 2>&1; then
+        if "{{ brew_bin }}" list --formula "{{ item }}" >/dev/null 2>&1; then
           exit 0
         fi
-        brew install "{{ item }}"
+        "{{ brew_bin }}" install "{{ item }}"
         echo "__changed__"
+      args:
+        executable: /bin/sh
       loop: "{{ base_packages }}"
       register: brew_base_install
       changed_when: "'__changed__' in brew_base_install.stdout"
       when:
         - install_packages | bool
         - ansible_facts.system == 'Darwin'
-        - brew_check.rc == 0
+        - brew_bin is defined
 
     - name: Install optional packages on macOS
       ansible.builtin.shell: |
-        if brew list --formula "{{ item }}" >/dev/null 2>&1; then
+        if "{{ brew_bin }}" list --formula "{{ item }}" >/dev/null 2>&1; then
           exit 0
         fi
-        brew install "{{ item }}"
+        "{{ brew_bin }}" install "{{ item }}"
         echo "__changed__"
-      loop: "{{ optional_packages }}"
+      args:
+        executable: /bin/sh
+      loop: "{{ optional_packages + optional_macos_packages }}"
       register: brew_optional_install
       changed_when: "'__changed__' in brew_optional_install.stdout"
       failed_when: false
@@ -230,22 +293,22 @@
         - install_packages | bool
         - install_optional_packages | bool
         - ansible_facts.system == 'Darwin'
-        - brew_check.rc == 0
-
-    - name: Require Homebrew for macOS package installation
-      ansible.builtin.fail:
-        msg: "Homebrew is required for macOS package installation. Install brew first or rerun with -e install_packages=no."
-      when:
-        - install_packages | bool
-        - ansible_facts.system == 'Darwin'
-        - brew_check.rc != 0
+        - brew_bin is defined
 
     - name: Create local bin directory
       ansible.builtin.file:
         path: "{{ bin_dir }}"
         state: directory
         mode: "0755"
-      when: install_wifi_helper | bool or install_proxmox_helper | bool or install_newt_service_helper | bool or install_mise_direnv | bool
+      when: install_wifi_helper | bool or install_proxmox_helper | bool or install_newt_service_helper | bool or install_fetchall_helper | bool or install_mise_direnv | bool
+
+    - name: Create workspace directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: "{{ workspace_dirs }}"
+      when: install_workspace_dirs | bool
 
     - name: Refuse wifi helper install outside macOS
       ansible.builtin.fail:
@@ -418,7 +481,7 @@
         create: true
         marker: "# {mark} init aliases"
         block: |
-          [ -f "{{ aliases_file }}" ] && . "{{ aliases_file }}"
+          [ -f "$HOME/.aliases" ] && . "$HOME/.aliases"
       loop:
         - "{{ home_dir }}/.zshrc"
         - "{{ home_dir }}/.bashrc"
@@ -545,6 +608,27 @@
         - trust_mise_config | bool
         - mise_config_stat.stat.exists
 
+    - name: Check missing global mise tools
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - install
+          - --dry-run-code
+      changed_when: false
+      failed_when: mise_install_check.rc not in [0, 1]
+      register: mise_install_check
+      when: install_mise_direnv | bool
+
+    - name: Install global mise tools
+      ansible.builtin.command:
+        argv:
+          - "{{ mise_bin }}"
+          - install
+          - --yes
+      when:
+        - install_mise_direnv | bool
+        - mise_install_check.rc == 1
+
     - name: Check global direnv mise entry
       ansible.builtin.command:
         argv:
@@ -602,7 +686,7 @@
         create: true
         marker: "# {mark} init mise and direnv"
         block: |
-          command -v mise >/dev/null 2>&1 && eval "$(mise activate {{ item.shell }})"
+          command -v mise >/dev/null 2>&1 && eval "$(mise activate {{ item.shell }} --quiet)"
           command -v direnv >/dev/null 2>&1 && eval "$(direnv hook {{ item.shell }})"
       loop:
         - path: "{{ home_dir }}/.zshrc"

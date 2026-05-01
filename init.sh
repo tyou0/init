@@ -8,7 +8,17 @@ PYTHON_MISE_VERSION="${PYTHON_MISE_VERSION:-lts}"
 PYTHON_PRECOMPILED_FLAVOR="${PYTHON_PRECOMPILED_FLAVOR:-install_only}"
 PYTHON_LTS_VERSION="${PYTHON_LTS_VERSION:-3.13}"
 AUTO_YES=0
+UNAME_S="$(uname -s)"
 declare -a ANSIBLE_ARGS=()
+
+case "$UNAME_S" in
+    Darwin)
+        export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        ;;
+    *)
+        export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+        ;;
+esac
 
 has() {
     command -v "$1" >/dev/null 2>&1
@@ -28,13 +38,39 @@ parse_args() {
     done
 }
 
+sudo_if_needed() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
 ensure_fetcher() {
     if has curl || has wget; then
         return
     fi
 
-    printf 'Neither curl nor wget is available. Install one and rerun this script.\n' >&2
-    exit 1
+    if has apt-get; then
+        sudo_if_needed apt-get update
+        sudo_if_needed apt-get install -y curl
+    elif has dnf; then
+        sudo_if_needed dnf install -y curl
+    elif has yum; then
+        sudo_if_needed yum install -y curl
+    elif has pacman; then
+        sudo_if_needed pacman -Sy --needed --noconfirm curl
+    elif has zypper; then
+        sudo_if_needed zypper --non-interactive install curl
+    elif has apk; then
+        sudo_if_needed apk add --no-cache curl
+    elif [ "$UNAME_S" = "Darwin" ]; then
+        printf 'Neither curl nor wget is available. Install one and rerun this script.\n' >&2
+        exit 1
+    else
+        printf 'Neither curl nor wget is available, and this package manager is unsupported.\n' >&2
+        exit 1
+    fi
 }
 
 fetch_url() {
@@ -45,7 +81,7 @@ fetch_url() {
     elif has wget; then
         wget -qO- "$url"
     else
-        printf 'Neither curl nor wget is available.\n' >&2
+        printf 'Neither curl nor banner is available.\n' >&2
         return 1
     fi
 }
@@ -86,7 +122,9 @@ ensure_mise() {
 }
 
 activate_mise() {
+    set +u
     eval "$("$MISE_BIN" activate bash)"
+    set -u
     hash -r
 }
 
@@ -135,13 +173,21 @@ ensure_python() {
 
     if ! has uv; then
         "$MISE_BIN" use -g --yes uv@latest
-        activate_mise
+        "$MISE_BIN" reshim uv >/dev/null 2>&1 || true
+    fi
+}
+
+run_uv() {
+    if has uv; then
+        uv "$@"
+    else
+        "$MISE_BIN" exec uv@latest -- uv "$@"
     fi
 }
 
 ensure_pipx() {
-    if ! uv tool list | awk '{print $1}' | grep -qx 'pipx'; then
-        uv tool install pipx
+    if ! run_uv tool list | awk '{print $1}' | grep -qx 'pipx'; then
+        run_uv tool install pipx
     fi
 }
 
@@ -168,18 +214,20 @@ trust_global_mise_config
 activate_mise
 ensure_python
 ensure_pipx
-ensure_ansible "${ANSIBLE_ARGS[@]}"
+ensure_ansible
 
 if [ "$AUTO_YES" -eq 1 ]; then
     ANSIBLE_ARGS+=(
         -e config_mode=copy
         -e install_packages=yes
         -e install_optional_packages=yes
+        -e install_workspace_dirs=yes
         -e install_mise_direnv=yes
         -e trust_mise_config=yes
         -e install_wifi_helper=no
         -e install_proxmox_helper=no
         -e install_newt_service_helper=no
+        -e install_fetchall_helper=yes
         -e install_aliases=yes
         -e install_profiles=yes
         -e install_tmux=yes
