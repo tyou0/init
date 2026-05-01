@@ -9,7 +9,7 @@
       default: "copy"
       private: false
     - name: install_packages
-      prompt: "Install base packages: bash, ca-certificates, curl, wget, git, jq, ripgrep, tmux, zsh, zlib1g-dev, build-essential, libssl-dev, libyaml-dev, libreadline-dev, libffi-dev, autoconf, bison?"
+      prompt: "Install base packages for this OS, including shell tools and language build dependencies?"
       default: "yes"
       private: false
     - name: install_optional_packages
@@ -89,6 +89,24 @@
       - libffi-dev
       - autoconf
       - bison
+    macos_base_packages:
+      - bash
+      - ca-certificates
+      - curl
+      - wget
+      - git
+      - jq
+      - ripgrep
+      - tmux
+      - zsh
+      - zlib
+      - openssl@3
+      - libyaml
+      - readline
+      - libffi
+      - autoconf
+      - bison
+      - pkg-config
     optional_packages:
       - aria2
       - htop
@@ -268,7 +286,7 @@
         echo "__changed__"
       args:
         executable: /bin/sh
-      loop: "{{ base_packages }}"
+      loop: "{{ macos_base_packages }}"
       register: brew_base_install
       changed_when: "'__changed__' in brew_base_install.stdout"
       when:
@@ -664,6 +682,7 @@
           - upgrade
       register: mise_upgrade
       changed_when: "'All tools are up to date' not in (mise_upgrade.stdout | default(''))"
+      failed_when: false
       when: install_mise_direnv | bool
 
     - name: List installed mise tools
@@ -677,7 +696,7 @@
 
     - name: Show mise status
       ansible.builtin.debug:
-        msg: "{{ [mise_upgrade.stdout | default(''), 'Installed mise tools:'] + (mise_ls.stdout_lines | default([])) }}"
+        msg: "{{ [mise_upgrade.stdout | default(''), mise_upgrade.stderr | default(''), 'Installed mise tools:'] + (mise_ls.stdout_lines | default([])) }}"
       when: install_mise_direnv | bool
 
     - name: Add mise and direnv shell hooks
