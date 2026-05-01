@@ -10,6 +10,7 @@ PYTHON_LTS_VERSION="${PYTHON_LTS_VERSION:-3.13}"
 AUTO_YES=0
 UNAME_S="$(uname -s)"
 declare -a ANSIBLE_ARGS=()
+declare -a AUTO_ANSIBLE_ARGS=()
 
 case "$UNAME_S" in
     Darwin)
@@ -81,7 +82,7 @@ fetch_url() {
     elif has wget; then
         wget -qO- "$url"
     else
-        printf 'Neither curl nor banner is available.\n' >&2
+        printf 'Neither curl nor wget is available.\n' >&2
         return 1
     fi
 }
@@ -206,6 +207,102 @@ ensure_ansible() {
     fi
 }
 
+resolve_ansible_python_interpreter() {
+    local python_bin
+
+    python_bin="$("$MISE_BIN" which python3 2>/dev/null || true)"
+    if [ -n "$python_bin" ] && [ -x "$python_bin" ]; then
+        printf '%s\n' "$python_bin"
+        return
+    fi
+
+    if has python3; then
+        command -v python3
+        return
+    fi
+
+    printf 'Failed to resolve a Python interpreter for Ansible.\n' >&2
+    exit 1
+}
+
+resolve_install_packages_choice() {
+    local choice="unknown"
+    local i=0
+    local arg
+    local value
+
+    if [ "$AUTO_YES" -eq 1 ]; then
+        choice="yes"
+    fi
+
+    while [ "$i" -lt "${#ANSIBLE_ARGS[@]}" ]; do
+        arg="${ANSIBLE_ARGS[$i]}"
+        value=""
+
+        case "$arg" in
+            -e|--extra-vars)
+                i=$((i + 1))
+                if [ "$i" -lt "${#ANSIBLE_ARGS[@]}" ]; then
+                    value="${ANSIBLE_ARGS[$i]}"
+                fi
+                ;;
+            -e*)
+                value="${arg#-e}"
+                ;;
+            --extra-vars=*)
+                value="${arg#--extra-vars=}"
+                ;;
+        esac
+
+        case "$value" in
+            *install_packages=no*|*install_packages=false*|*install_packages=0*|*"install_packages":"no"*|*"install_packages":\ "no"*|*"install_packages":false*|*"install_packages":\ false*)
+                choice="no"
+                ;;
+            *install_packages=yes*|*install_packages=true*|*install_packages=1*|*"install_packages":"yes"*|*"install_packages":\ "yes"*|*"install_packages":true*|*"install_packages":\ true*)
+                choice="yes"
+                ;;
+        esac
+
+        i=$((i + 1))
+    done
+
+    printf '%s\n' "$choice"
+}
+
+ensure_sudo_for_linux_packages() {
+    local install_packages_choice
+
+    if [ "$UNAME_S" != "Linux" ] || [ "$(id -u)" -eq 0 ]; then
+        return
+    fi
+
+    install_packages_choice="$(resolve_install_packages_choice)"
+    if [ "$install_packages_choice" = "no" ]; then
+        return
+    fi
+
+    if [ "$install_packages_choice" = "unknown" ] && [ -t 0 ]; then
+        return
+    fi
+
+    if ! has sudo; then
+        printf 'Linux package installation requires sudo, but sudo is not installed. Rerun as root or pass -e install_packages=no.\n' >&2
+        exit 1
+    fi
+
+    if sudo -n true 2>/dev/null; then
+        return
+    fi
+
+    if [ -t 0 ]; then
+        printf 'Linux package installation requires sudo. The playbook will ask for the sudo password if needed.\n' >&2
+        return
+    fi
+
+    printf 'Linux package installation requires sudo credentials. Run sudo -v first, rerun as root, pass --ask-become-pass in an interactive terminal, or pass -e install_packages=no.\n' >&2
+    exit 1
+}
+
 parse_args "$@"
 
 ensure_fetcher
@@ -217,7 +314,7 @@ ensure_pipx
 ensure_ansible
 
 if [ "$AUTO_YES" -eq 1 ]; then
-    ANSIBLE_ARGS+=(
+    AUTO_ANSIBLE_ARGS+=(
         -e config_mode=copy
         -e install_packages=yes
         -e install_optional_packages=yes
@@ -236,4 +333,11 @@ if [ "$AUTO_YES" -eq 1 ]; then
     )
 fi
 
-exec ansible-playbook -i "${ROOT_DIR}/inventory.ini" "${ROOT_DIR}/playbook.yml" "${ANSIBLE_ARGS[@]}"
+ensure_sudo_for_linux_packages
+
+exec ansible-playbook \
+    -i "${ROOT_DIR}/inventory.ini" \
+    -e "ansible_python_interpreter=$(resolve_ansible_python_interpreter)" \
+    "${AUTO_ANSIBLE_ARGS[@]}" \
+    "${ANSIBLE_ARGS[@]}" \
+    "${ROOT_DIR}/playbook.yml"

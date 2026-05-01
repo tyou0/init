@@ -130,9 +130,32 @@ ensure_ansible() {
     fi
 }
 
+resolve_ansible_python_interpreter() {
+    local python_bin
+
+    python_bin="$("$MISE_BIN" which python3 2>/dev/null || true)"
+    if [ -n "$python_bin" ] && [ -x "$python_bin" ]; then
+        printf '%s\n' "$python_bin"
+        return
+    fi
+
+    if has python3; then
+        command -v python3
+        return
+    fi
+
+    printf 'Failed to resolve a Python interpreter for Ansible.\n' >&2
+    exit 1
+}
+
 run_ansible_playbook() {
     local ansible_playbook_bin="${ANSIBLE_PLAYBOOK_BIN:-ansible-playbook}"
-    local cmd=("$ansible_playbook_bin" -i "${ROOT_DIR}/inventory.ini" "$PLAYBOOK_FILE")
+    local cmd=(
+        "$ansible_playbook_bin"
+        -i "${ROOT_DIR}/inventory.ini"
+        -e "ansible_python_interpreter=$(resolve_ansible_python_interpreter)"
+        "$PLAYBOOK_FILE"
+    )
     local extra_var arg
 
     if [ "${#ANSIBLE_EXTRA_VARS[@]}" -gt 0 ]; then

@@ -157,6 +157,7 @@
       loop:
         - install_packages
         - install_optional_packages
+        - install_workspace_dirs
         - install_mise_direnv
         - trust_mise_config
         - install_wifi_helper
@@ -203,12 +204,87 @@
       ansible.builtin.meta: end_play
       when: (install_confirmation.user_input | default(confirm_install | default('no')) | lower) != 'yes'
 
+    - name: Prepare sudo for Linux package changes
+      when:
+        - install_packages | bool
+        - ansible_facts.system == 'Linux'
+        - ansible_facts.user_id != 'root'
+      block:
+        - name: Check for sudo on Linux
+          ansible.builtin.command:
+            argv:
+              - sh
+              - -lc
+              - command -v sudo
+          changed_when: false
+          register: linux_sudo_check
+          failed_when: false
+
+        - name: Stop if sudo is unavailable for Linux package changes
+          ansible.builtin.fail:
+            msg: "Linux package installation requires sudo. Rerun as root or pass install_packages=no."
+          when: linux_sudo_check.rc != 0
+
+        - name: Check for cached or passwordless sudo on Linux
+          ansible.builtin.command:
+            argv:
+              - sudo
+              - -n
+              - "true"
+          changed_when: false
+          register: linux_sudo_noninteractive
+          failed_when: false
+          when: ansible_become_password is not defined
+
+        - name: Ask for sudo password for Linux package changes
+          ansible.builtin.pause:
+            prompt: "sudo password"
+            echo: false
+          register: linux_sudo_password_prompt
+          no_log: true
+          when:
+            - ansible_become_password is not defined
+            - linux_sudo_noninteractive.rc | default(1) != 0
+
+        - name: Use prompted sudo password for Linux package changes
+          ansible.builtin.set_fact:
+            ansible_become_password: "{{ linux_sudo_password_prompt.user_input }}"
+          no_log: true
+          when: >
+            linux_sudo_password_prompt is defined
+            and not (linux_sudo_password_prompt.skipped | default(false))
+
+        - name: Validate sudo password for Linux package changes
+          ansible.builtin.command:
+            argv:
+              - sudo
+              - -S
+              - -p
+              - ""
+              - -v
+            stdin: "{{ linux_sudo_password_prompt.user_input }}"
+          changed_when: false
+          register: linux_sudo_password_validation
+          failed_when: false
+          no_log: true
+          when: >
+            linux_sudo_password_prompt is defined
+            and not (linux_sudo_password_prompt.skipped | default(false))
+
+        - name: Stop if sudo authentication fails for Linux package changes
+          ansible.builtin.fail:
+            msg: "sudo authentication failed or this user is not permitted to use sudo. Rerun as root, pass install_packages=no, or run sudo -v before rerunning."
+          when: >
+            linux_sudo_password_validation is defined
+            and not (linux_sudo_password_validation.skipped | default(false))
+            and linux_sudo_password_validation.rc != 0
+
   tasks:
     - name: Install base packages on Linux
       ansible.builtin.package:
         name: "{{ base_packages }}"
         state: present
-      become: true
+      become: "{{ ansible_facts.user_id != 'root' }}"
       when:
         - install_packages | bool
         - ansible_facts.system == 'Linux'
@@ -217,7 +293,7 @@
       ansible.builtin.package:
         name: "{{ item }}"
         state: present
-      become: true
+      become: "{{ ansible_facts.user_id != 'root' }}"
       loop: "{{ optional_packages + optional_linux_packages }}"
       failed_when: false
       when:
@@ -235,9 +311,9 @@
 
     - name: Set zsh as default shell on Linux
       ansible.builtin.user:
-        name: "{{ ansible_user_id }}"
+        name: "{{ ansible_facts.user_id }}"
         shell: "{{ linux_zsh_path.stdout }}"
-      become: true
+      become: "{{ ansible_facts.user_id != 'root' }}"
       when:
         - install_packages | bool
         - ansible_facts.system == 'Linux'
@@ -754,9 +830,9 @@
         set -euo pipefail
         export ZIM_HOME="{{ home_dir }}/.zim"
         zimfw() { source "$ZIM_HOME/zimfw.zsh" "$@"; }
-        zimfw build
         zimfw install
         zimfw update
+        zimfw build
       args:
         executable: /bin/zsh
       register: zimfw_sync
