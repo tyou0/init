@@ -62,7 +62,7 @@ Managed files include:
 - `~/.gitconfig`, sanitized to exclude credential helper commands
 - `~/.config/mise/config.toml`
 - `~/.config/git/ignore`
-- optional helper scripts in `~/.local/bin`
+- optional helper scripts in `~/.local/bin` (`wifi`, `updateProxmoxGuestIp`, `fetchall`)
 - shell rc blocks for aliases, mise, and direnv
 
 Helper installs are explicit and platform-aware:

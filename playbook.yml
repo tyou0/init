@@ -36,6 +36,10 @@
       prompt: "Install the newt_service helper into ~/.local/bin? This is only for manual post-install use after Newt is already installed."
       default: "no"
       private: false
+    - name: install_fetchall_helper
+      prompt: "Install the fetchall helper into ~/.local/bin?"
+      default: "yes"
+      private: false
     - name: install_aliases
       prompt: "Install aliases and source them from ~/.zshrc and ~/.bashrc?"
       default: "yes"
@@ -125,6 +129,7 @@
         - install_wifi_helper
         - install_proxmox_helper
         - install_newt_service_helper
+        - install_fetchall_helper
         - install_aliases
         - install_profiles
         - install_tmux
@@ -148,6 +153,7 @@
           - "Wifi helper: {{ install_wifi_helper }} -> {{ bin_dir }}"
           - "Proxmox helper: {{ install_proxmox_helper }} -> {{ bin_dir }}"
           - "Newt service helper: {{ install_newt_service_helper }} -> {{ bin_dir }}"
+          - "Fetchall helper: {{ install_fetchall_helper }} -> {{ bin_dir }}"
           - "Aliases: {{ install_aliases }} -> {{ aliases_file }}"
           - "Profiles/configs: {{ install_profiles }}"
           - "Tmux/tpack: {{ install_tmux }} -> {{ tmux_plugin_dir }}"
@@ -317,6 +323,25 @@
         - config_mode == 'copy'
         - ansible_facts.system == 'Linux'
         - ansible_service_mgr == 'systemd'
+
+    - name: Install fetchall helper by symlink
+      ansible.builtin.file:
+        src: "{{ repo_root }}/fetchall.sh"
+        dest: "{{ bin_dir }}/fetchall"
+        state: link
+        force: true
+      when:
+        - install_fetchall_helper | bool
+        - config_mode == 'symlink'
+
+    - name: Install fetchall helper by copy
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/fetchall.sh"
+        dest: "{{ bin_dir }}/fetchall"
+        mode: "0755"
+      when:
+        - install_fetchall_helper | bool
+        - config_mode == 'copy'
 
     - name: Install aliases by symlink
       ansible.builtin.file:

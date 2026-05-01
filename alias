@@ -6,6 +6,7 @@ alias proxyoff='unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY AL
 
 alias ccyolo='claude --permission-mode bypassPermissions'
 alias cch='claude -p --permission-mode bypassPermissions'
+alias fetchall='fetchall'
 
 
 yt() {
