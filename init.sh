@@ -306,6 +306,18 @@ ensure_ansible() {
 resolve_ansible_python_interpreter() {
     local python_bin
 
+    if [ -n "$SUDO_TARGET_USER" ]; then
+        if [ -x /usr/bin/python3 ]; then
+            printf '%s\n' /usr/bin/python3
+            return
+        fi
+
+        if has python3; then
+            command -v python3
+            return
+        fi
+    fi
+
     python_bin="$("$MISE_BIN" which python3 2>/dev/null || true)"
     if [ -n "$python_bin" ] && [ -x "$python_bin" ]; then
         printf '%s\n' "$python_bin"
