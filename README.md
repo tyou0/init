@@ -21,10 +21,12 @@ Accept the default answers and run non-interactively:
 ```
 
 On Linux, package installation and default-shell changes need sudo. Run
-`sudo -v` first, run as root, or pass `--ask-become-pass` from an interactive
-terminal. In a noninteractive shell such as `su user -c ...`, pass
-`-e install_packages=no` to skip package and shell changes unless sudo is
-already cached or passwordless.
+`sudo -v` first, run `sudo ./init.sh -y`, or pass `--ask-become-pass` from an
+interactive terminal. When invoked through sudo, the wrapper re-enters as the
+original user so dotfiles and mise tools are installed under that user's home
+directory while package changes still use cached sudo. In a noninteractive shell
+such as `su user -c ...`, pass `-e install_packages=no` to skip package and
+shell changes unless sudo is already cached or passwordless.
 
 Install secondary desktop apps separately:
 

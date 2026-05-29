@@ -3,6 +3,28 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MISE_BIN="${MISE_BIN:-}"
+
+reexec_sudo_invocation_as_user() {
+    local sudo_user="${SUDO_USER:-}"
+
+    if [ "${INIT_SUDO_REEXEC:-0}" = "1" ]; then
+        return
+    fi
+
+    if [ "$(id -u)" -ne 0 ] || [ -z "$sudo_user" ] || [ "$sudo_user" = "root" ]; then
+        return
+    fi
+
+    if ! id "$sudo_user" >/dev/null 2>&1; then
+        printf 'sudo invoked init for unknown user %s.\n' "$sudo_user" >&2
+        exit 1
+    fi
+
+    printf 'sudo detected; continuing bootstrap as %s while using cached sudo for package changes.\n' "$sudo_user" >&2
+    exec sudo -H -u "$sudo_user" env INIT_SUDO_REEXEC=1 "$ROOT_DIR/init.sh" "$@"
+}
+
+reexec_sudo_invocation_as_user "$@"
 MISE_INSTALL_VERSION="${MISE_INSTALL_VERSION:-v2026.4.14}"
 PYTHON_MISE_VERSION="${PYTHON_MISE_VERSION:-lts}"
 PYTHON_PRECOMPILED_FLAVOR="${PYTHON_PRECOMPILED_FLAVOR:-install_only}"
