@@ -3,28 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MISE_BIN="${MISE_BIN:-}"
-
-reexec_sudo_invocation_as_user() {
-    local sudo_user="${SUDO_USER:-}"
-
-    if [ "${INIT_SUDO_REEXEC:-0}" = "1" ]; then
-        return
-    fi
-
-    if [ "$(id -u)" -ne 0 ] || [ -z "$sudo_user" ] || [ "$sudo_user" = "root" ]; then
-        return
-    fi
-
-    if ! id "$sudo_user" >/dev/null 2>&1; then
-        printf 'sudo invoked init for unknown user %s.\n' "$sudo_user" >&2
-        exit 1
-    fi
-
-    printf 'sudo detected; continuing bootstrap as %s while using cached sudo for package changes.\n' "$sudo_user" >&2
-    exec sudo -H -u "$sudo_user" env INIT_SUDO_REEXEC=1 "$ROOT_DIR/init.sh" "$@"
-}
-
-reexec_sudo_invocation_as_user "$@"
+SUDO_TARGET_USER=""
+SUDO_TARGET_HOME=""
+BOOTSTRAP_MISE_CONFIG=""
 MISE_INSTALL_VERSION="${MISE_INSTALL_VERSION:-v2026.4.14}"
 PYTHON_MISE_VERSION="${PYTHON_MISE_VERSION:-lts}"
 PYTHON_PRECOMPILED_FLAVOR="${PYTHON_PRECOMPILED_FLAVOR:-install_only}"
@@ -33,6 +14,7 @@ AUTO_YES=0
 UNAME_S="$(uname -s)"
 declare -a ANSIBLE_ARGS=()
 declare -a AUTO_ANSIBLE_ARGS=()
+declare -a TARGET_ANSIBLE_ARGS=()
 BOOTSTRAP_PATH=""
 
 add_path_entry() {
@@ -77,6 +59,66 @@ set_bootstrap_path
 
 has() {
     command -v "$1" >/dev/null 2>&1
+}
+
+configure_sudo_bootstrap_mise() {
+    if [ -z "$SUDO_TARGET_USER" ]; then
+        return
+    fi
+
+    BOOTSTRAP_MISE_CONFIG="$(mktemp "${TMPDIR:-/tmp}/init-mise-bootstrap.XXXXXX.toml")"
+    chmod 600 "$BOOTSTRAP_MISE_CONFIG"
+    {
+        printf '[tools]\n'
+        printf 'python = "%s"\n' "$(resolve_python_mise_version)"
+        printf 'uv = "latest"\n'
+        printf '\n[settings.python]\n'
+        printf 'compile = false\n'
+        printf 'precompiled_flavor = "%s"\n' "$PYTHON_PRECOMPILED_FLAVOR"
+    } >"$BOOTSTRAP_MISE_CONFIG"
+
+    export MISE_GLOBAL_CONFIG_FILE="$BOOTSTRAP_MISE_CONFIG"
+}
+
+detect_sudo_target_user() {
+    local sudo_user="${SUDO_USER:-}"
+    local passwd_entry
+    local _name _passwd _uid _gid _gecos home _shell
+
+    if [ "$(id -u)" -ne 0 ] || [ -z "$sudo_user" ] || [ "$sudo_user" = "root" ]; then
+        return
+    fi
+
+    if ! id "$sudo_user" >/dev/null 2>&1; then
+        printf 'sudo invoked init for unknown user %s.\n' "$sudo_user" >&2
+        exit 1
+    fi
+
+    if has getent; then
+        passwd_entry="$(getent passwd "$sudo_user" || true)"
+        if [ -n "$passwd_entry" ]; then
+            IFS=: read -r _name _passwd _uid _gid _gecos home _shell <<EOF
+$passwd_entry
+EOF
+            SUDO_TARGET_HOME="$home"
+        fi
+    fi
+
+    if [ -z "$SUDO_TARGET_HOME" ]; then
+        SUDO_TARGET_HOME="$(sudo -H -u "$sudo_user" sh -c 'printf %s "$HOME"')"
+    fi
+
+    if [ -z "$SUDO_TARGET_HOME" ]; then
+        printf 'Failed to resolve home directory for sudo user %s.\n' "$sudo_user" >&2
+        exit 1
+    fi
+
+    SUDO_TARGET_USER="$sudo_user"
+    TARGET_ANSIBLE_ARGS+=(
+        -e "init_target_user=$SUDO_TARGET_USER"
+        -e "init_target_home=$SUDO_TARGET_HOME"
+    )
+    printf 'sudo detected; package tasks run as root and user tasks target %s (%s).\n' "$SUDO_TARGET_USER" "$SUDO_TARGET_HOME" >&2
 }
 
 parse_args() {
@@ -406,6 +448,8 @@ ensure_sudo_for_linux_packages() {
 }
 
 parse_args "$@"
+detect_sudo_target_user
+configure_sudo_bootstrap_mise
 
 ensure_fetcher
 ensure_mise
@@ -440,6 +484,7 @@ ensure_sudo_for_linux_packages
 exec ansible-playbook \
     -i "${ROOT_DIR}/inventory.ini" \
     -e "ansible_python_interpreter=$(resolve_ansible_python_interpreter)" \
+    "${TARGET_ANSIBLE_ARGS[@]}" \
     "${AUTO_ANSIBLE_ARGS[@]}" \
     "${ANSIBLE_ARGS[@]}" \
     "${ROOT_DIR}/playbook.yml"

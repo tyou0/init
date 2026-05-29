@@ -22,11 +22,10 @@ Accept the default answers and run non-interactively:
 
 On Linux, package installation and default-shell changes need sudo. Run
 `sudo -v` first, run `sudo ./init.sh -y`, or pass `--ask-become-pass` from an
-interactive terminal. When invoked through sudo, the wrapper re-enters as the
-original user so dotfiles and mise tools are installed under that user's home
-directory while package changes still use cached sudo. In a noninteractive shell
-such as `su user -c ...`, pass `-e install_packages=no` to skip package and
-shell changes unless sudo is already cached or passwordless.
+interactive terminal. When invoked through sudo, package tasks run as root while
+dotfiles and mise tools are installed under the original user's home directory.
+In a noninteractive shell such as `su user -c ...`, pass `-e install_packages=no`
+to skip package and shell changes unless sudo is already cached or passwordless.
 
 Install secondary desktop apps separately:
 
@@ -98,9 +97,8 @@ The main playbook can install:
 - `~/src`.
 - `mise` and `direnv`.
 - Global mise tools from `config/mise/config.toml`: `bat`, `bun`, `deno`,
-  `dart`, `direnv`, FFmpeg from BtbN static builds, `go`, `lazydocker`,
-  `lazygit`, `neovim`, Node LTS, `pnpm`, Python 3.13, Rust, `uv`, `yt-dlp`,
-  Ruby, and Temurin Java 25.
+  `dart`, `direnv`, `go`, `lazydocker`, `lazygit`, `neovim`, Node LTS,
+  `pnpm`, Python 3.13, Rust, `uv`, `yt-dlp`, Ruby, and Temurin Java 25.
 - Tmux config, tpack, and tmux plugins.
 - Zim and Powerlevel10k.
 - Shell aliases and profile files.
