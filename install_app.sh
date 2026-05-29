@@ -7,15 +7,47 @@ MISE_BIN="${MISE_BIN:-}"
 UNAME_S="$(uname -s)"
 ANSIBLE_ARGS=()
 ANSIBLE_EXTRA_VARS=()
+BOOTSTRAP_PATH=""
 
-case "$UNAME_S" in
-    Darwin)
-        export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH"
-        ;;
-    *)
-        export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-        ;;
-esac
+add_path_entry() {
+    local entry="$1"
+
+    if [ -z "$entry" ]; then
+        return
+    fi
+
+    case ":$BOOTSTRAP_PATH:" in
+        *":$entry:"*) return ;;
+    esac
+
+    BOOTSTRAP_PATH="${BOOTSTRAP_PATH:+$BOOTSTRAP_PATH:}$entry"
+}
+
+set_bootstrap_path() {
+    local entry
+    local old_ifs="$IFS"
+
+    BOOTSTRAP_PATH=""
+    add_path_entry "$HOME/.local/bin"
+    add_path_entry "$HOME/.local/share/mise/shims"
+
+    if [ "$UNAME_S" = "Darwin" ]; then
+        add_path_entry /opt/homebrew/bin
+        add_path_entry /usr/local/bin
+    fi
+
+    IFS=:
+    for entry in $PATH; do
+        if [ -d "$entry" ] && [ -x "$entry" ]; then
+            add_path_entry "$entry"
+        fi
+    done
+    IFS="$old_ifs"
+
+    export PATH="$BOOTSTRAP_PATH"
+}
+
+set_bootstrap_path
 
 has() {
     command -v "$1" >/dev/null 2>&1
@@ -148,6 +180,135 @@ resolve_ansible_python_interpreter() {
     exit 1
 }
 
+resolve_install_secondary_apps_choice() {
+    local choice="unknown"
+    local i=0
+    local arg
+    local value
+
+    for value in "${ANSIBLE_EXTRA_VARS[@]}"; do
+        case "$value" in
+            *install_secondary_apps=no*|*install_secondary_apps=false*|*install_secondary_apps=0*|*"install_secondary_apps":"no"*|*"install_secondary_apps":\ "no"*|*"install_secondary_apps":false*|*"install_secondary_apps":\ false*)
+                choice="no"
+                ;;
+            *install_secondary_apps=yes*|*install_secondary_apps=true*|*install_secondary_apps=1*|*"install_secondary_apps":"yes"*|*"install_secondary_apps":\ "yes"*|*"install_secondary_apps":true*|*"install_secondary_apps":\ true*)
+                choice="yes"
+                ;;
+        esac
+    done
+
+    while [ "$i" -lt "${#ANSIBLE_ARGS[@]}" ]; do
+        arg="${ANSIBLE_ARGS[$i]}"
+        value=""
+
+        case "$arg" in
+            -e|--extra-vars)
+                i=$((i + 1))
+                if [ "$i" -lt "${#ANSIBLE_ARGS[@]}" ]; then
+                    value="${ANSIBLE_ARGS[$i]}"
+                fi
+                ;;
+            -e*)
+                value="${arg#-e}"
+                ;;
+            --extra-vars=*)
+                value="${arg#--extra-vars=}"
+                ;;
+        esac
+
+        case "$value" in
+            *install_secondary_apps=no*|*install_secondary_apps=false*|*install_secondary_apps=0*|*"install_secondary_apps":"no"*|*"install_secondary_apps":\ "no"*|*"install_secondary_apps":false*|*"install_secondary_apps":\ false*)
+                choice="no"
+                ;;
+            *install_secondary_apps=yes*|*install_secondary_apps=true*|*install_secondary_apps=1*|*"install_secondary_apps":"yes"*|*"install_secondary_apps":\ "yes"*|*"install_secondary_apps":true*|*"install_secondary_apps":\ true*)
+                choice="yes"
+                ;;
+        esac
+
+        i=$((i + 1))
+    done
+
+    printf '%s\n' "$choice"
+}
+
+extra_vars_have_become_password() {
+    case "$1" in
+        *ansible_become_password*|*ansible_become_pass*) return 0 ;;
+    esac
+
+    return 1
+}
+
+has_ansible_become_auth() {
+    local i=0
+    local arg
+    local value
+
+    if [ -n "${ANSIBLE_BECOME_PASSWORD:-}" ] || [ -n "${ANSIBLE_BECOME_PASS:-}" ]; then
+        return 0
+    fi
+
+    while [ "$i" -lt "${#ANSIBLE_ARGS[@]}" ]; do
+        arg="${ANSIBLE_ARGS[$i]}"
+        value=""
+
+        case "$arg" in
+            -K|--ask-become-pass|--ask-become-password|--become-password-file|--become-password-file=*)
+                return 0
+                ;;
+            -e|--extra-vars)
+                i=$((i + 1))
+                if [ "$i" -lt "${#ANSIBLE_ARGS[@]}" ]; then
+                    value="${ANSIBLE_ARGS[$i]}"
+                fi
+                ;;
+            -e*)
+                value="${arg#-e}"
+                ;;
+            --extra-vars=*)
+                value="${arg#--extra-vars=}"
+                ;;
+        esac
+
+        if [ -n "$value" ] && extra_vars_have_become_password "$value"; then
+            return 0
+        fi
+
+        i=$((i + 1))
+    done
+
+    return 1
+}
+
+ensure_sudo_for_linux_secondary_packages() {
+    local install_secondary_apps_choice
+
+    if [ "$UNAME_S" != "Linux" ] || [ "$(id -u)" -eq 0 ]; then
+        return
+    fi
+
+    install_secondary_apps_choice="$(resolve_install_secondary_apps_choice)"
+    if [ "$install_secondary_apps_choice" != "yes" ]; then
+        return
+    fi
+
+    if ! has sudo; then
+        printf 'Linux secondary app package installation requires sudo, but sudo is not installed. Rerun as root or pass -e install_secondary_apps=no.\n' >&2
+        exit 1
+    fi
+
+    if sudo -n true 2>/dev/null; then
+        return
+    fi
+
+    if has_ansible_become_auth; then
+        return
+    fi
+
+    printf 'Linux secondary app package installation requires sudo credentials. Run sudo -v first, rerun as root, pass --ask-become-pass from an interactive terminal, or pass -e install_secondary_apps=no.\n' >&2
+    exit 1
+}
+
 run_ansible_playbook() {
     local ansible_playbook_bin="${ANSIBLE_PLAYBOOK_BIN:-ansible-playbook}"
     local cmd=(
@@ -178,5 +339,6 @@ ensure_fetcher
 ensure_mise
 ensure_uv
 ensure_ansible
+ensure_sudo_for_linux_secondary_packages
 
 run_ansible_playbook

@@ -11,15 +11,47 @@ AUTO_YES=0
 UNAME_S="$(uname -s)"
 declare -a ANSIBLE_ARGS=()
 declare -a AUTO_ANSIBLE_ARGS=()
+BOOTSTRAP_PATH=""
 
-case "$UNAME_S" in
-    Darwin)
-        export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH"
-        ;;
-    *)
-        export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-        ;;
-esac
+add_path_entry() {
+    local entry="$1"
+
+    if [ -z "$entry" ]; then
+        return
+    fi
+
+    case ":$BOOTSTRAP_PATH:" in
+        *":$entry:"*) return ;;
+    esac
+
+    BOOTSTRAP_PATH="${BOOTSTRAP_PATH:+$BOOTSTRAP_PATH:}$entry"
+}
+
+set_bootstrap_path() {
+    local entry
+    local old_ifs="$IFS"
+
+    BOOTSTRAP_PATH=""
+    add_path_entry "$HOME/.local/bin"
+    add_path_entry "$HOME/.local/share/mise/shims"
+
+    if [ "$UNAME_S" = "Darwin" ]; then
+        add_path_entry /opt/homebrew/bin
+        add_path_entry /usr/local/bin
+    fi
+
+    IFS=:
+    for entry in $PATH; do
+        if [ -d "$entry" ] && [ -x "$entry" ]; then
+            add_path_entry "$entry"
+        fi
+    done
+    IFS="$old_ifs"
+
+    export PATH="$BOOTSTRAP_PATH"
+}
+
+set_bootstrap_path
 
 has() {
     command -v "$1" >/dev/null 2>&1
@@ -269,6 +301,55 @@ resolve_install_packages_choice() {
     printf '%s\n' "$choice"
 }
 
+extra_vars_have_become_password() {
+    case "$1" in
+        *ansible_become_password*|*ansible_become_pass*) return 0 ;;
+    esac
+
+    return 1
+}
+
+has_ansible_become_auth() {
+    local i=0
+    local arg
+    local value
+
+    if [ -n "${ANSIBLE_BECOME_PASSWORD:-}" ] || [ -n "${ANSIBLE_BECOME_PASS:-}" ]; then
+        return 0
+    fi
+
+    while [ "$i" -lt "${#ANSIBLE_ARGS[@]}" ]; do
+        arg="${ANSIBLE_ARGS[$i]}"
+        value=""
+
+        case "$arg" in
+            -K|--ask-become-pass|--ask-become-password|--become-password-file|--become-password-file=*)
+                return 0
+                ;;
+            -e|--extra-vars)
+                i=$((i + 1))
+                if [ "$i" -lt "${#ANSIBLE_ARGS[@]}" ]; then
+                    value="${ANSIBLE_ARGS[$i]}"
+                fi
+                ;;
+            -e*)
+                value="${arg#-e}"
+                ;;
+            --extra-vars=*)
+                value="${arg#--extra-vars=}"
+                ;;
+        esac
+
+        if [ -n "$value" ] && extra_vars_have_become_password "$value"; then
+            return 0
+        fi
+
+        i=$((i + 1))
+    done
+
+    return 1
+}
+
 ensure_sudo_for_linux_packages() {
     local install_packages_choice
 
@@ -281,7 +362,7 @@ ensure_sudo_for_linux_packages() {
         return
     fi
 
-    if [ "$install_packages_choice" = "unknown" ] && [ -t 0 ]; then
+    if [ "$install_packages_choice" = "unknown" ]; then
         return
     fi
 
@@ -294,12 +375,11 @@ ensure_sudo_for_linux_packages() {
         return
     fi
 
-    if [ -t 0 ]; then
-        printf 'Linux package installation requires sudo. The playbook will ask for the sudo password if needed.\n' >&2
+    if has_ansible_become_auth; then
         return
     fi
 
-    printf 'Linux package installation requires sudo credentials. Run sudo -v first, rerun as root, pass --ask-become-pass in an interactive terminal, or pass -e install_packages=no.\n' >&2
+    printf 'Linux package installation requires sudo credentials. Run sudo -v first, rerun as root, pass --ask-become-pass from an interactive terminal, or pass -e install_packages=no.\n' >&2
     exit 1
 }
 

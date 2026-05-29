@@ -20,10 +20,11 @@ Accept the default answers and run non-interactively:
 ./init.sh -y
 ```
 
-On Linux, package installation and default-shell changes need sudo. In a
-terminal, the playbook asks for the sudo password when cached sudo credentials
-are unavailable; in a noninteractive shell, run `sudo -v` first, run as root, or
-pass `-e install_packages=no` to skip package and shell changes.
+On Linux, package installation and default-shell changes need sudo. Run
+`sudo -v` first, run as root, or pass `--ask-become-pass` from an interactive
+terminal. In a noninteractive shell such as `su user -c ...`, pass
+`-e install_packages=no` to skip package and shell changes unless sudo is
+already cached or passwordless.
 
 Install secondary desktop apps separately:
 
@@ -95,8 +96,9 @@ The main playbook can install:
 - `~/src`.
 - `mise` and `direnv`.
 - Global mise tools from `config/mise/config.toml`: `bat`, `bun`, `deno`,
-  `dart`, `direnv`, `ffmpeg`, `go`, `lazydocker`, `lazygit`, `neovim`, Node
-  LTS, `pnpm`, Python 3.13, Rust, `uv`, `yt-dlp`, Ruby, and Temurin Java 25.
+  `dart`, `direnv`, FFmpeg from BtbN static builds, `go`, `lazydocker`,
+  `lazygit`, `neovim`, Node LTS, `pnpm`, Python 3.13, Rust, `uv`, `yt-dlp`,
+  Ruby, and Temurin Java 25.
 - Tmux config, tpack, and tmux plugins.
 - Zim and Powerlevel10k.
 - Shell aliases and profile files.
