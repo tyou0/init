@@ -72,6 +72,8 @@
     tmux_plugin_dir: "{{ home_dir }}/.tmux/plugins"
     tpack_dir: "{{ tmux_plugin_dir }}/tpm"
     mise_config_file: "{{ home_dir }}/.config/mise/config.toml"
+    mise_state_dir: "{{ home_dir }}/.local/state/init"
+    mise_install_log: "{{ mise_state_dir }}/mise-install.log"
     zimfw_version: "v1.20.0"
     zimfw_download_url: "https://github.com/zimfw/zimfw/releases/download/{{ zimfw_version }}/zimfw.zsh"
     base_packages:
@@ -642,42 +644,38 @@
             - install_tmux | bool
             - tmux_has_session.rc == 0
 
-        - name: Check for mise
-          ansible.builtin.command: sh -lc 'command -v mise'
-          changed_when: false
-          failed_when: false
-          register: mise_check
+        - name: Check for mise binary in local bin
+          ansible.builtin.stat:
+            path: "{{ bin_dir }}/mise"
+          register: local_mise_stat
           when: install_mise_direnv | bool
 
-        - name: Install mise if missing
+        - name: Download mise installer
           ansible.builtin.get_url:
             url: https://mise.jdx.dev/install.sh
             dest: "{{ bin_dir }}/mise-install.sh"
             mode: "0755"
-          args:
-            creates: "{{ bin_dir }}/mise-install.sh"
+            force: true
           register: mise_installer_download
           when:
             - install_mise_direnv | bool
-            - mise_check.rc != 0
+            - not local_mise_stat.stat.exists
 
-        - name: Run pinned mise installer
+        - name: Install latest mise into local bin
           ansible.builtin.command:
             argv:
               - sh
               - "{{ bin_dir }}/mise-install.sh"
           environment:
-            MISE_VERSION: "v2026.4.14"
             MISE_INSTALL_PATH: "{{ bin_dir }}/mise"
-          args:
-            creates: "{{ bin_dir }}/mise"
+          changed_when: true
           when:
             - install_mise_direnv | bool
-            - mise_check.rc != 0
+            - not local_mise_stat.stat.exists
 
         - name: Set mise binary path
           ansible.builtin.set_fact:
-            mise_bin: "{{ mise_check.stdout if mise_check.rc == 0 else bin_dir + '/mise' }}"
+            mise_bin: "{{ bin_dir }}/mise"
           when: install_mise_direnv | bool
 
         - name: Add mise and direnv shell hooks
@@ -719,23 +717,47 @@
         - name: Check missing global mise tools
           ansible.builtin.shell: |
             eval "$("{{ mise_bin }}" activate bash --quiet)"
-            "{{ mise_bin }}" install --dry-run-code
+            "{{ mise_bin }}" install --dry-run
           args:
             executable: /bin/bash
           changed_when: false
-          failed_when: mise_install_check.rc not in [0, 1]
           register: mise_install_check
           when: install_mise_direnv | bool
 
-        - name: Install global mise tools
-          ansible.builtin.shell: |
-            eval "$("{{ mise_bin }}" activate bash --quiet)"
-            "{{ mise_bin }}" install --yes
-          args:
-            executable: /bin/bash
+        - name: Show pending mise tool installs
+          ansible.builtin.debug:
+            msg:
+              - "Installing global mise tools; this can take several minutes."
+              - "Some tools compile from source (e.g. ruby) and others are large downloads (rust, go, java, node)."
+              - "Live progress is written to {{ mise_install_log }}"
+              - "Follow it from another terminal with: tail -f {{ mise_install_log }}"
+              - "Pending:"
+              - "{{ (mise_install_check.stderr_lines | default([]) + mise_install_check.stdout_lines | default([])) | select('search', 'would install') | list }}"
           when:
             - install_mise_direnv | bool
-            - mise_install_check.rc == 1
+            - "'would install' in ((mise_install_check.stdout | default('')) ~ (mise_install_check.stderr | default('')))"
+
+        - name: Ensure mise install log directory exists
+          ansible.builtin.file:
+            path: "{{ mise_state_dir }}"
+            state: directory
+            mode: "0755"
+          when:
+            - install_mise_direnv | bool
+            - "'would install' in ((mise_install_check.stdout | default('')) ~ (mise_install_check.stderr | default('')))"
+
+        - name: Install global mise tools
+          ansible.builtin.shell: |
+            set -o pipefail
+            eval "$("{{ mise_bin }}" activate bash --quiet)"
+            "{{ mise_bin }}" install --yes --verbose 2>&1 | tee "{{ mise_install_log }}"
+          args:
+            executable: /bin/bash
+          register: mise_install_run
+          changed_when: true
+          when:
+            - install_mise_direnv | bool
+            - "'would install' in ((mise_install_check.stdout | default('')) ~ (mise_install_check.stderr | default('')))"
 
         - name: Check global direnv mise entry
           ansible.builtin.shell: |

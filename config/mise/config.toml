@@ -4,7 +4,7 @@
 bat = "latest"
 bun = "latest"
 deno = "latest"
-dart = { version = "latest", url = "https://storage.googleapis.com/dart-archive/channels/stable/release/{{ version }}/sdk/dartsdk-{{ os() }}-{{ arch() }}-release.zip", version_list_url = "https://storage.googleapis.com/storage/v1/b/dart-archive/o?prefix=channels/stable/release/&delimiter=/", version_regex = 'channels/stable/release/(\d+\.\d+\.\d+)/' }
+dart = "latest"
 direnv = "latest"
 go = "latest"
 lazydocker = "latest"
@@ -24,3 +24,6 @@ java = "temurin-25"
 [settings.python]
 compile = false
 precompiled_flavor = "install_only"
+
+[settings.ruby]
+compile = false

@@ -20,12 +20,16 @@ Accept the default answers and run non-interactively:
 ./init.sh -y
 ```
 
-On Linux, package installation and default-shell changes need sudo. Run
-`sudo -v` first, run `sudo ./init.sh -y`, or pass `--ask-become-pass` from an
-interactive terminal. When invoked through sudo, package tasks run as root while
-dotfiles and mise tools are installed under the original user's home directory.
-In a noninteractive shell such as `su user -c ...`, pass `-e install_packages=no`
-to skip package and shell changes unless sudo is already cached or passwordless.
+On Linux, package installation and default-shell changes need sudo, and sudo is
+used only for those tasks. When run as a non-root user from an interactive
+terminal without cached or passwordless sudo, the script automatically prompts
+for your sudo password (via `--ask-become-pass`) so the package tasks can
+authenticate; dotfiles and mise tools are still installed without sudo. You can
+also run `sudo -v` first or run `sudo ./init.sh -y`. When invoked through sudo,
+package tasks run as root while dotfiles and mise tools are installed under the
+original user's home directory. In a noninteractive shell such as
+`su user -c ...`, pass `-e install_packages=no` to skip package and shell
+changes unless sudo is already cached or passwordless.
 
 Install secondary desktop apps separately:
 

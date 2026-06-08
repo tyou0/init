@@ -6,7 +6,7 @@ MISE_BIN="${MISE_BIN:-}"
 SUDO_TARGET_USER=""
 SUDO_TARGET_HOME=""
 BOOTSTRAP_MISE_CONFIG=""
-MISE_INSTALL_VERSION="${MISE_INSTALL_VERSION:-v2026.4.14}"
+MISE_INSTALL_VERSION="${MISE_INSTALL_VERSION:-latest}"
 PYTHON_MISE_VERSION="${PYTHON_MISE_VERSION:-lts}"
 PYTHON_PRECOMPILED_FLAVOR="${PYTHON_PRECOMPILED_FLAVOR:-install_only}"
 PYTHON_LTS_VERSION="${PYTHON_LTS_VERSION:-3.13}"
@@ -15,6 +15,7 @@ UNAME_S="$(uname -s)"
 declare -a ANSIBLE_ARGS=()
 declare -a AUTO_ANSIBLE_ARGS=()
 declare -a TARGET_ANSIBLE_ARGS=()
+declare -a SUDO_ANSIBLE_ARGS=()
 BOOTSTRAP_PATH=""
 
 add_path_entry() {
@@ -61,11 +62,55 @@ has() {
     command -v "$1" >/dev/null 2>&1
 }
 
-configure_sudo_bootstrap_mise() {
-    if [ -z "$SUDO_TARGET_USER" ]; then
-        return
+ensure_locale() {
+    local current
+    local candidate
+    local available=""
+    local choice=""
+
+    if has locale; then
+        available="$(locale -a 2>/dev/null || true)"
     fi
 
+    # If the inherited locale already works, keep it.
+    if [ -n "${LC_ALL:-}" ]; then
+        current="$LC_ALL"
+    elif [ -n "${LANG:-}" ]; then
+        current="$LANG"
+    else
+        current=""
+    fi
+
+    if [ -n "$current" ] && [ -n "$available" ]; then
+        case "$current" in
+            *.[Uu][Tt][Ff]-8 | *.[Uu][Tt][Ff]8)
+                if printf '%s\n' "$available" | grep -qiE "^${current%.*}\.(utf-?8)$"; then
+                    return
+                fi
+                ;;
+        esac
+    fi
+
+    # Pick the first supported UTF-8 locale we know how to use.
+    for candidate in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+        if [ -z "$available" ] || printf '%s\n' "$available" | grep -qiFx "$candidate"; then
+            choice="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$choice" ]; then
+        choice="C.UTF-8"
+    fi
+
+    unset LC_ALL LANGUAGE
+    export LANG="$choice"
+    export LC_ALL="$choice"
+}
+
+ensure_locale
+
+configure_bootstrap_mise() {
     BOOTSTRAP_MISE_CONFIG="$(mktemp "${TMPDIR:-/tmp}/init-mise-bootstrap.XXXXXX.toml")"
     chmod 600 "$BOOTSTRAP_MISE_CONFIG"
     {
@@ -75,9 +120,17 @@ configure_sudo_bootstrap_mise() {
         printf '\n[settings.python]\n'
         printf 'compile = false\n'
         printf 'precompiled_flavor = "%s"\n' "$PYTHON_PRECOMPILED_FLAVOR"
+        printf '\n[settings.ruby]\n'
+        printf 'compile = false\n'
     } >"$BOOTSTRAP_MISE_CONFIG"
 
     export MISE_GLOBAL_CONFIG_FILE="$BOOTSTRAP_MISE_CONFIG"
+}
+
+cleanup_bootstrap_mise() {
+    if [ -n "$BOOTSTRAP_MISE_CONFIG" ]; then
+        rm -f "$BOOTSTRAP_MISE_CONFIG"
+    fi
 }
 
 detect_sudo_target_user() {
@@ -204,17 +257,25 @@ ensure_mise() {
         return
     fi
 
-    if has mise; then
-        MISE_BIN="$(command -v mise)"
+    mkdir -p "$HOME/.local/bin"
+
+    # Prefer a mise already installed in ~/.local/bin so we don't re-download
+    # on every run. Otherwise install mise (latest by default) and prefer it,
+    # even when an older system mise exists on PATH.
+    if [ -x "$HOME/.local/bin/mise" ]; then
+        MISE_BIN="$HOME/.local/bin/mise"
         return
     fi
 
-    mkdir -p "$HOME/.local/bin"
     installer_path="$(mktemp)"
     trap 'rm -f "$installer_path"' RETURN
     download_url "https://mise.jdx.dev/install.sh" "$installer_path"
     chmod +x "$installer_path"
-    MISE_VERSION="$MISE_INSTALL_VERSION" MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh "$installer_path"
+    if [ -n "$MISE_INSTALL_VERSION" ] && [ "$MISE_INSTALL_VERSION" != "latest" ]; then
+        MISE_VERSION="$MISE_INSTALL_VERSION" MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh "$installer_path"
+    else
+        MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh "$installer_path"
+    fi
     MISE_BIN="$HOME/.local/bin/mise"
 }
 
@@ -455,13 +516,24 @@ ensure_sudo_for_linux_packages() {
         return
     fi
 
+    # sudo needs a password and none was supplied. If we have an interactive
+    # terminal, ask ansible to prompt for it so the (only) become tasks, the
+    # Linux package installs, can authenticate. Otherwise we cannot continue.
+    if [ -t 0 ]; then
+        SUDO_ANSIBLE_ARGS+=(--ask-become-pass)
+        printf 'Linux package installation needs sudo; you will be prompted for your sudo password.\n' >&2
+        return
+    fi
+
     printf 'Linux package installation requires sudo credentials. Run sudo -v first, rerun as root, pass --ask-become-pass from an interactive terminal, or pass -e install_packages=no.\n' >&2
     exit 1
 }
 
+trap cleanup_bootstrap_mise EXIT
+
 parse_args "$@"
 detect_sudo_target_user
-configure_sudo_bootstrap_mise
+configure_bootstrap_mise
 
 ensure_fetcher
 ensure_mise
@@ -496,6 +568,7 @@ ensure_sudo_for_linux_packages
 exec ansible-playbook \
     -i "${ROOT_DIR}/inventory.ini" \
     -e "ansible_python_interpreter=$(resolve_ansible_python_interpreter)" \
+    "${SUDO_ANSIBLE_ARGS[@]}" \
     "${TARGET_ANSIBLE_ARGS[@]}" \
     "${AUTO_ANSIBLE_ARGS[@]}" \
     "${ANSIBLE_ARGS[@]}" \
