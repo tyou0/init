@@ -101,7 +101,7 @@ The main playbook can install:
 - `~/src`.
 - `mise` and `direnv`.
 - Global mise tools from `config/mise/config.toml`: `bat`, `bun`, `deno`,
-  `dart`, `direnv`, `go`, `lazydocker`, `lazygit`, `neovim`, Node LTS,
+  `dart`, `direnv`, `go`, GitHub CLI, `lazydocker`, `lazygit`, `neovim`, Node LTS,
   `pnpm`, Python 3.13, Rust, `uv`, `yt-dlp`, Ruby, and Temurin Java 25.
 - Tmux config, tpack, and tmux plugins.
 - Zim and Powerlevel10k.
@@ -202,6 +202,9 @@ Some tools intentionally track a stable or rolling line rather than an exact
 patch release. For example, `config/mise/config.toml` uses tracks such as
 `node = "lts"` and several `latest` tools. For strict reproducibility, pin exact
 mise tool versions and git checkouts.
+
+`gh` is pinned in `config/mise/config.toml` because GitHub release asset
+availability can briefly break `latest` installs during bootstrap.
 
 Optional packages are best-effort because package availability differs across
 distros. A missing optional package should not block the rest of the bootstrap.
